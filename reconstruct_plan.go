@@ -7,6 +7,8 @@ import (
 	"io/fs"
 	"iter"
 	"log/slog"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
@@ -144,12 +146,37 @@ func (p *reconstructionPlan) put(name string, b []byte) error {
 	if rel == "" || !fs.ValidPath(rel) {
 		return fmt.Errorf("reconstruction: invalid file %s", name)
 	}
+	s.mu.Lock()
 	for existing := range s.files {
 		if strings.EqualFold(existing, rel) {
 			delete(s.files, existing)
+			if s.dir != "" {
+				if pth, err := s.diskPath(existing); err == nil {
+					_ = os.Remove(pth)
+				}
+			}
 		}
 	}
+	s.mu.Unlock()
+	if s.dir != "" {
+		pth, err := s.diskPath(rel)
+		if err != nil {
+			return err
+		}
+		if err := os.MkdirAll(filepath.Dir(pth), 0o755); err != nil {
+			return err
+		}
+		if err := os.WriteFile(pth, b, 0o644); err != nil {
+			return err
+		}
+		s.mu.Lock()
+		s.files[rel] = nil
+		s.mu.Unlock()
+		return nil
+	}
+	s.mu.Lock()
 	s.files[rel] = b
+	s.mu.Unlock()
 	return nil
 }
 func (p *reconstructionPlan) matches(pattern string, dirs bool) ([]string, error) {
@@ -235,17 +262,25 @@ func (p *reconstructionPlan) extract(ctx context.Context, op setupdata.Operation
 		}
 		p.mu.Lock()
 		p.remaining[name]--
-		if p.remaining[name] <= 0 {
+		drop := p.remaining[name] <= 0
+		if drop {
 			delete(p.decoded, name)
 		}
 		p.mu.Unlock()
+		if drop {
+			defer staged.Close()
+		}
 	} else {
 		data, err := p.read(source)
 		if err != nil {
 			return err
 		}
 		slog.Info("extract reconstructed archive", "name", source)
-		staged = newStaging()
+		staged, err = newDiskStaging()
+		if err != nil {
+			return err
+		}
+		defer staged.Close()
 		if err := extractVolumeData(ctx, Extractor{Dest: staged}, source, data, nil); err != nil {
 			return err
 		}
@@ -271,22 +306,25 @@ func (p *reconstructionPlan) extract(ctx context.Context, op setupdata.Operation
 		}
 	}
 	var files int
-	var bytes int
-	for name, b := range staged.files {
+	var nbytes int64
+	for name := range staged.files {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		if mapped, ok := mapName(name); ok {
-			if _, err := memberName(mapped); err != nil {
+			n, err := store.ingest(ctx, staged, name, mapped)
+			if err != nil {
 				return err
 			}
-			store.files[mapped] = b
 			files++
-			bytes += len(b)
-			slog.Info("placed", "path", mapped, "size", len(b), "from", source)
+			nbytes += n
+			slog.Info("placed", "path", mapped, "size", n, "from", source)
 			if dest == "app" || strings.HasPrefix(dest, "app/") {
 				p.scheduleHash(ctx, mapped, nil)
 			}
 		}
 	}
-	slog.Info("placed archive", "from", source, "to", dest, "filter", filter, "files", files, "bytes", bytes)
+	slog.Info("placed archive", "from", source, "to", dest, "filter", filter, "files", files, "bytes", nbytes)
 	return nil
 }
 
@@ -364,8 +402,14 @@ func (p *reconstructionPlan) prefetch(ctx context.Context, ops []setupdata.Opera
 				Fn: func(ctx context.Context, s *taskgroup.Status, name string) error {
 					s.Update(name)
 					slog.Info("extract volume", "name", name)
-					staged := newStaging()
-					err := extractVolume(ctx, Extractor{Source: p.source, Dest: staged}, p.volumes[name], s)
+					staged, err := newDiskStaging()
+					if err != nil {
+						return err
+					}
+					err = extractVolume(ctx, Extractor{Source: p.source, Dest: staged}, p.volumes[name], s)
+					if err != nil {
+						_ = staged.Close()
+					}
 					p.mu.Lock()
 					if err != nil {
 						if p.decodeErr == nil {

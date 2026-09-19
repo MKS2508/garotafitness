@@ -18,6 +18,18 @@ func (c ctxReader) Read(p []byte) (int, error) {
 	return c.r.Read(p)
 }
 
+type ctxAt struct {
+	ctx context.Context
+	ra  io.ReaderAt
+}
+
+func (c ctxAt) ReadAt(p []byte, off int64) (int, error) {
+	if err := c.ctx.Err(); err != nil {
+		return 0, err
+	}
+	return c.ra.ReadAt(p, off)
+}
+
 var copyBufs = sync.Pool{New: func() any {
 	b := make([]byte, 32<<10)
 	return &b

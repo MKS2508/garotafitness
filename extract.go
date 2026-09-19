@@ -12,6 +12,7 @@ import (
 	"iter"
 	"log/slog"
 	"slices"
+	"sync"
 
 	"github.com/lewtec/lewkit/x/taskgroup"
 	"github.com/lucasew/garotafitness/setupdata"
@@ -150,6 +151,32 @@ func (c countReader) Read(b []byte) (int, error) {
 	return n, err
 }
 
+// spanAt reports the highest ReadAt offset inside [base, base+lim).
+type spanAt struct {
+	ra        io.ReaderAt
+	base, lim int64
+	s         *taskgroup.Status
+	mu        sync.Mutex
+	max       int64
+}
+
+func (t *spanAt) ReadAt(p []byte, off int64) (int, error) {
+	n, err := t.ra.ReadAt(p, off)
+	if n > 0 && t.s != nil && off >= t.base {
+		end := off - t.base + int64(n)
+		if end > t.lim {
+			end = t.lim
+		}
+		t.mu.Lock()
+		if end > t.max {
+			t.max = end
+			t.s.Progress(t.max, t.lim)
+		}
+		t.mu.Unlock()
+	}
+	return n, err
+}
+
 func asReaderAt(f fs.File) (io.ReaderAt, int64, bool) {
 	ra, ok := f.(io.ReaderAt)
 	if !ok {
@@ -245,15 +272,10 @@ func extractSolids(ctx context.Context, e Extractor, ra io.ReaderAt, solids iter
 			Items:    list,
 			TaskName: func(_ int, s solid) string { return s.pipe.String() },
 			Fn: func(ctx context.Context, st *taskgroup.Status, s solid) error {
-				var total int64
-				for _, m := range s.files {
-					total += int64(m.Size)
+				if s.csz > 0 {
+					st.Progress(0, int64(s.csz))
 				}
-				prog := &byteProgress{s: st, total: total}
-				if total > 0 {
-					st.Progress(0, total)
-				}
-				return extractSolid(ctx, e, ra, s, prog)
+				return extractSolid(ctx, e, ra, s, &byteProgress{s: st})
 			},
 		}.Run(ctx)
 	})
@@ -307,6 +329,10 @@ func extractSolid(ctx context.Context, e Extractor, ra io.ReaderAt, s solid, pro
 	if s.off < 0 {
 		return fmt.Errorf("solid span")
 	}
+	ra = ctxAt{ctx: ctx, ra: ra}
+	if prog != nil && prog.s != nil && s.csz > 0 {
+		ra = &spanAt{ra: ra, base: s.off, lim: int64(s.csz), s: prog.s}
+	}
 	var (
 		src     io.Reader = io.NewSectionReader(ra, s.off, int64(s.csz))
 		closers []io.Closer
@@ -334,9 +360,6 @@ func extractSolid(ctx context.Context, e Extractor, ra io.ReaderAt, s solid, pro
 		}
 		prog.member(m.Path)
 		in := io.Reader(io.LimitReader(src, int64(m.Size)))
-		if prog != nil {
-			in = countReader{r: in, p: prog}
-		}
 		if err := writeMember(ctx, e.Dest, m, in); err != nil {
 			return fmt.Errorf("extract %s pipeline %s (solid offset %d compressed %d): %w",
 				m.Path, s.pipe.String(), s.off, s.csz, err)

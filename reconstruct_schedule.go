@@ -3,7 +3,6 @@ package garotafitness
 import (
 	"bytes"
 	"context"
-	"crypto/md5"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -35,18 +34,27 @@ func (p *reconstructionPlan) scheduleHash(ctx context.Context, path string, deps
 	_ = withSession(ctx, func(ctx context.Context) error {
 		taskgroup.Go(ctx, "md5 "+path, taskgroup.CPU, func(ctx context.Context, s *taskgroup.Status) error {
 			defer p.pending.Done()
-			defer s.Unit()()
 			if err := ctx.Err(); err != nil {
 				p.failSched(err)
 				return err
 			}
-			b, err := p.read(lewpath.New("app", path).String())
+			store, rel, err := p.store(lewpath.New("app", path).String())
 			if err != nil {
 				p.failSched(err)
 				return err
 			}
-			got := md5.Sum(b)
-			if !bytes.Equal(got[:], want) {
+			r, n, err := store.openRead(rel)
+			if err != nil {
+				p.failSched(err)
+				return err
+			}
+			defer r.Close()
+			got, err := hashReader(ctx, r, n, s)
+			if err != nil {
+				p.failSched(err)
+				return err
+			}
+			if !bytes.Equal(got, want) {
 				err := fmt.Errorf("installed checksum: %s: %x want %x", path, got, want)
 				p.failSched(err)
 				return err
