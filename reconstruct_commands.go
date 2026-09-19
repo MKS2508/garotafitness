@@ -17,6 +17,7 @@ import (
 	"github.com/lucasew/garotafitness/reconstruct/x3"
 	"github.com/lucasew/garotafitness/reconstruct/x4"
 	"github.com/lucasew/garotafitness/reconstruct/x5"
+	"github.com/lucasew/garotafitness/reconstruct/x5n"
 	"github.com/lucasew/garotafitness/reconstruct/xdelta"
 )
 
@@ -398,7 +399,13 @@ func (p *reconstructionPlan) words(ctx context.Context, w []string, cwd string, 
 				if err != nil {
 					return err
 				}
-				files = append(files, sevenz.File{Name: lewpath.New(m).Name(), Data: b})
+				name := m
+				if rel, ok := strings.CutPrefix(m, cwd+"/"); ok {
+					name = rel
+				} else {
+					name = lewpath.New(m).Name()
+				}
+				files = append(files, sevenz.File{Name: name, Data: b})
 			}
 		}
 		out, err := sevenz.Encode(ctx, files)
@@ -652,23 +659,33 @@ func (p *reconstructionPlan) x5nDir(ctx context.Context, patch, cwd string) erro
 	if err != nil {
 		return err
 	}
-	old, err := p.dirBytes(cwd)
+	info, err := x5n.Parse(diff)
 	if err != nil {
 		return err
 	}
-	out, err := x5.Apply(ctx, old, diff)
-	if err != nil {
-		return fmt.Errorf("x5n: %w", err)
+	old := make(map[string][]byte, len(info.OldRefs))
+	for _, idx := range info.OldRefs {
+		if idx < 0 || idx >= len(info.OldPaths) {
+			return fmt.Errorf("x5n: old ref %d", idx)
+		}
+		rel := info.OldPaths[idx]
+		b, err := p.read(mustVirtual(rel, cwd))
+		if err != nil {
+			return err
+		}
+		old[rel] = b
 	}
-	return p.putDirBytes(cwd, out)
-}
-
-func (p *reconstructionPlan) dirBytes(cwd string) ([]byte, error) {
-	return nil, fmt.Errorf("x5n: directory patch requires unpacked new.x5n")
-}
-
-func (p *reconstructionPlan) putDirBytes(cwd string, _ []byte) error {
-	return fmt.Errorf("x5n: directory patch requires unpacked new.x5n")
+	out, err := x5n.Apply(ctx, old, diff)
+	if err != nil {
+		return err
+	}
+	for dest, b := range out {
+		if err := p.put(mustVirtual(dest, cwd), b); err != nil {
+			return err
+		}
+		slog.Info("x5n", "dst", dest, "out", len(b))
+	}
+	return nil
 }
 
 func (p *reconstructionPlan) x4(a []string, cwd string) error {

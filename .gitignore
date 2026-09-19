@@ -15,5 +15,7 @@ stream/xt2png/build/
 /stream/pref/build/
 !reconstruct/fsb/fsb.wasm
 !reconstruct/x5/hpatch.wasm
+!reconstruct/x5n/hpatchsf.wasm
+!reconstruct/sevenz/sevenzenc.wasm
 !reconstruct/fgpack/fgpack.wasm
 !reconstruct/xdelta/xdelta.wasm

@@ -18,13 +18,13 @@ const (
 
 const streamHeaderSize = 18
 
-// Header is the XTL0 prefix read by xtool decode before DecChunk.
+// Header is the XTL0 prefix read by the shipped xtool decode before DecChunk.
 type Header struct {
 	Depth      int32
 	Method     string
 	Resources  []Resource
-	StoreDD    int32
-	Compressed byte
+	StoreDD    int32 // unused on FS25 xtool_2020; public 0.7.9 dd#
+	Compressed byte  // 1-byte flag after resources; 0 = no inline dups
 	Dups       []Dup
 	DDMem      int64
 }
@@ -78,13 +78,18 @@ func parseHeader(r io.Reader) (Header, error) {
 	if h.Resources, err = readResources(r); err != nil {
 		return Header{}, fmt.Errorf("xt2png: resources: %w", err)
 	}
-	if h.StoreDD, err = readI32(r); err != nil {
-		return Header{}, fmt.Errorf("xt2png: storedd: %w", err)
-	}
+	// Shipped FS25 xtool.exe (xtool_2020, May 2022) writes a 1-byte flag
+	// after EncInit resources, not StoreDD+Compressed from public 0.7.9.
+	// Flag 0: dups live in the EncInit .key resources; DecChunk starts at
+	// StreamCount. Flag != 0: 16-byte digest + u32 n + n TDuplicate2.
+	h.StoreDD = -2
 	if h.Compressed, err = readU8(r); err != nil {
-		return Header{}, fmt.Errorf("xt2png: compressed: %w", err)
+		return Header{}, fmt.Errorf("xt2png: flag: %w", err)
 	}
-	if h.StoreDD > -2 {
+	if h.Compressed != 0 {
+		if _, err := io.CopyN(io.Discard, r, 16); err != nil {
+			return Header{}, fmt.Errorf("xt2png: dd digest: %w", err)
+		}
 		n, err := readU32(r)
 		if err != nil {
 			return Header{}, fmt.Errorf("xt2png: ddcount: %w", err)
@@ -100,9 +105,6 @@ func parseHeader(r io.Reader) (Header, error) {
 			if h.Dups[i].Count, err = readI32(r); err != nil {
 				return Header{}, fmt.Errorf("xt2png: dd: %w", err)
 			}
-		}
-		if h.DDMem, err = readI64(r); err != nil {
-			return Header{}, fmt.Errorf("xt2png: ddmem: %w", err)
 		}
 	}
 	return h, nil

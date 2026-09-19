@@ -74,7 +74,7 @@ func decodeAtom(ctx context.Context, r io.Reader, a Atom) (io.ReadCloser, error)
 	case AlgoDispack:
 		return dispack.NewReader(r)
 	case AlgoMPZZ:
-		return mpzz.NewReader(r)
+		return mpzz.NewReader(ctx, r)
 	case AlgoMPZ:
 		return mpz.NewReader(ctx, r)
 	case AlgoRZW:

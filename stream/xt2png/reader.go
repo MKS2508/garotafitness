@@ -19,7 +19,7 @@ const (
 	subPreflate = 2
 	subPNG      = 3
 	maxBlock    = 512 << 20
-	maxTail     = 64 << 20
+	maxTail     = 512 << 20
 )
 
 var (
@@ -48,17 +48,11 @@ func NewReader(ctx context.Context, r io.Reader) (io.ReadCloser, error) {
 	if err != nil {
 		return nil, err
 	}
-	if h.Compressed != 0 {
-		return nil, fmt.Errorf("xt2png: compressed=%d", h.Compressed)
-	}
-	if h.StoreDD > 0 {
-		return nil, fmt.Errorf("xt2png: srep wrap storeDD=%d", h.StoreDD)
-	}
 	if h.Depth < 0 || h.Depth > 16 {
 		return nil, fmt.Errorf("xt2png: depth %d", h.Depth)
 	}
 	rd := &reader{ctx: ctx, src: br, hdr: h, st: stNeedCount}
-	if h.StoreDD > -2 {
+	if len(h.Dups) > 0 {
 		rd.dd = newDedup(h.Dups)
 	}
 	return rd, nil
@@ -119,12 +113,8 @@ func (r *reader) next() error {
 	for {
 		switch r.st {
 		case stNeedCount:
-			if _, err := readResources(r.src); err != nil {
-				if err == io.EOF || err == io.ErrUnexpectedEOF {
-					return io.EOF
-				}
-				return fmt.Errorf("xt2png: chunk resources: %w", err)
-			}
+			// Shipped xtool DecChunk reads StreamCount directly. Extra
+			// EncInit resources are not repeated per chunk.
 			sc, err := readI32(r.src)
 			if err != nil {
 				if err == io.EOF || err == io.ErrUnexpectedEOF {

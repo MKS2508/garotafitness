@@ -1,6 +1,7 @@
 package garotafitness
 
 import (
+	"os"
 	"strings"
 	"testing"
 
@@ -79,4 +80,17 @@ func TestFarmingSimulator25XT2PNGNamed(t *testing.T) {
 		break
 	}
 	require.True(t, found)
+}
+
+func TestFarmingSimulator25Fg07(t *testing.T) {
+	src := corpus.OpenEnv(t, fs25Corpus)
+	out := t.TempDir()
+	dst, err := OpenDirDest(out)
+	require.NoError(t, err)
+	t.Cleanup(func() { dst.Close() })
+	require.NoError(t, extractVolume(t.Context(), Extractor{Source: src, Dest: dst}, Volume{Name: "fg-07.bin"}, nil))
+	b, err := os.ReadFile(out + "/new.x5n")
+	require.NoError(t, err)
+	require.Greater(t, len(b), 100)
+	require.Equal(t, "HDIFF19", string(b[:7]))
 }

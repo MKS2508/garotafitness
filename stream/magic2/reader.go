@@ -76,7 +76,7 @@ func (r *reader) fill() error {
 			return err
 		}
 		if capacity == 0 || n < 4 || n > 16<<20 {
-			return errBitstream
+			return fmt.Errorf("%w: metadata capacity=%d n=%d", errBitstream, capacity, n)
 		}
 		data := make([]byte, n)
 		if _, err := readRequired(r.src, data); err != nil {
@@ -94,19 +94,33 @@ func (r *reader) fill() error {
 			return err
 		}
 		if r.chunks.remaining != 0 {
-			return errBitstream
+			return fmt.Errorf("%w: trailer leftover %d", errBitstream, r.chunks.remaining)
 		}
 		n, err := read32(r.src)
 		if err != nil {
 			return err
 		}
-		if n != 0 {
-			return errBitstream
+		if n == 0 {
+			return io.EOF
 		}
-		return io.EOF
+		// Independent workers concatenate another metadata+segment run.
+		// Official single-stream files write a 0 word here.
+		if n < 4 || n > 16<<20 {
+			return fmt.Errorf("%w: next frame n=%d", errBitstream, n)
+		}
+		data := make([]byte, n)
+		if _, err := readRequired(r.src, data); err != nil {
+			return err
+		}
+		r.metadata = newMetadata(data)
+		r.chunks.remaining = 0
+		if r.decoder.header.Independent {
+			r.decoder = newDecoder(r.decoder.header)
+		}
+		return r.fill()
 	}
 	if s.size == 0 || s.size > 512<<20 || s.packed == 0 || s.packed > 512<<20 {
-		return errBitstream
+		return fmt.Errorf("%w: segment option=%d size=%d packed=%d aux=%d", errBitstream, s.option, s.size, s.packed, s.aux)
 	}
 	data := make([]byte, s.packed)
 	if _, err := readRequired(&r.chunks, data); err != nil {
@@ -136,7 +150,7 @@ func (r *chunkReader) Read(p []byte) (int, error) {
 			return 0, err
 		}
 		if n == 0 || n > r.capacity {
-			return 0, errBitstream
+			return 0, fmt.Errorf("%w: chunk n=%d capacity=%d", errBitstream, n, r.capacity)
 		}
 		r.remaining = n
 	}

@@ -4,7 +4,6 @@ package fgpack
 import (
 	"context"
 	_ "embed"
-	"encoding/binary"
 	"fmt"
 
 	"github.com/lucasew/garotafitness/internal/wasmrun"
@@ -20,7 +19,11 @@ func Encode(ctx context.Context, data []byte) ([]byte, error) {
 }
 
 // Options are the LZMA parameters recorded in the installer's compression recipe.
-type Options struct{ DictLog, FastBytes, LC, LP, PB int }
+type Options struct {
+	DictLog, FastBytes, LC, LP, PB int
+	Algo, BTMode, HashBytes        int
+	ReduceToSize                   bool
+}
 
 // DefaultOptions matches the LZMA SDK encoder's default properties.
 func DefaultOptions() Options { return Options{DictLog: 24, FastBytes: 32, LC: 3, LP: 0, PB: 2} }
@@ -32,9 +35,5 @@ func EncodeWithOptions(ctx context.Context, data []byte, o Options) ([]byte, err
 	if o.DictLog < 12 || o.DictLog > 29 || o.FastBytes < 5 || o.FastBytes > 273 || o.LC < 0 || o.LC > 8 || o.LP < 0 || o.LP > 4 || o.PB < 0 || o.PB > 4 {
 		return nil, fmt.Errorf("fgpack: invalid compression parameters")
 	}
-	var config [20]byte
-	for i, v := range []int{o.DictLog, o.FastBytes, o.LC, o.LP, o.PB} {
-		binary.LittleEndian.PutUint32(config[4*i:], uint32(v))
-	}
-	return wasmrun.Bytes(ctx, guest, "fgpack_encode", len(data)+len(data)/3+65536, data, config[:])
+	return wasmrun.Bytes(ctx, guest, "fgpack_encode", len(data)+len(data)/3+65536, data, encodeConfig(o))
 }

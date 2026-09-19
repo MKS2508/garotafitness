@@ -73,7 +73,8 @@ func opsMayWrite(ops []setupdata.Operation, path string) bool {
 		prog := strings.ToLower(lewpath.New(strings.ReplaceAll(op.Program, "\\", "/")).Name())
 		if prog == "{cmd}" || prog == "cmd.exe" || prog == "run.exe" || prog == "x3.exe" ||
 			strings.HasSuffix(prog, ".bat") || strings.HasSuffix(prog, ".cmd") ||
-			prog == "x.exe" || prog == "xdelta.exe" || prog == "xdelta3.exe" {
+			prog == "x.exe" || prog == "xdelta.exe" || prog == "xdelta3.exe" ||
+			prog == "x5n.exe" || prog == "x4.exe" || prog == "7z.exe" {
 			return true
 		}
 		words, err := recipeWords(op.Args)
@@ -360,6 +361,8 @@ func recipeFiles(name string, w []string, cwd string) (reads, writes []string, g
 			}
 			err = add(a[0], true)
 		}
+	case "7z.exe", "x4.exe", "x5n.exe":
+		glob = true
 	case "x5.exe", "hpatchz.exe":
 		if len(a) > 0 && strings.HasPrefix(a[0], "-s-") {
 			a = a[1:]
