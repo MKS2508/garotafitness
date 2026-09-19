@@ -83,10 +83,15 @@ func (d *oggreDecoder) next() ([]byte, error) {
 		if index < 0 {
 			index += n
 		}
-		out := append([]byte(nil), d.streams[index]...)
+		// oggre_dec 0x401752: slot 3 serial integer on the command stream, then patch Ogg serial.
+		serial := d.models[3].predict(d.models[3].integer(d.cmd, 5, 2, 4, false), 1)
+		out, err := rewriteSerial(append([]byte(nil), d.streams[index]...), serial)
+		if err != nil {
+			return nil, err
+		}
 		d.lastStream = out
 		d.dest = append(d.dest, out...)
-		d.lastPath = fmt.Sprintf("replay back=%d idx=%d stored=%d", back, index, len(d.streams))
+		d.lastPath = fmt.Sprintf("replay back=%d idx=%d stored=%d ser=%d", back, index, len(d.streams), serial)
 		DebugPath = d.lastPath
 		return out, nil
 	}

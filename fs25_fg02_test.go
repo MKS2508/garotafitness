@@ -2,7 +2,9 @@ package garotafitness
 
 import (
 	"bytes"
+	"encoding/binary"
 	"encoding/hex"
+	"fmt"
 	"hash/crc32"
 	"io"
 	"os"
@@ -259,5 +261,60 @@ func TestFS25Fg02FirstStreamPages(t *testing.T) {
 		if err != nil {
 			break
 		}
+	}
+}
+
+func TestFS25Fg02DumpAllMpzzBlocks(t *testing.T) {
+	src := corpus.OpenEnv(t, fs25Corpus)
+	vol, err := src.Open("fg-02.bin")
+	require.NoError(t, err)
+	defer vol.Close()
+	st, err := vol.Stat()
+	require.NoError(t, err)
+	ra := vol.(interface {
+		ReadAt([]byte, int64) (int, error)
+	})
+	v, err := parseVolumeAt("fg-02.bin", ra, st.Size())
+	require.NoError(t, err)
+	var s *solid
+	for g := range groupSolids(v.Members) {
+		cp := g
+		s = &cp
+		break
+	}
+	require.NotNil(t, s)
+	var r io.Reader = io.NewSectionReader(ra, s.off, int64(s.csz))
+	var closers []io.Closer
+	t.Cleanup(func() {
+		for i := len(closers) - 1; i >= 0; i-- {
+			closers[i].Close()
+		}
+	})
+	for i := len(s.pipe) - 1; i >= 1; i-- {
+		dec, err := Decode(t.Context(), r, s.pipe[i])
+		require.NoError(t, err, s.pipe[i])
+		closers = append(closers, dec)
+		r = dec
+	}
+	var ver [4]byte
+	_, err = io.ReadFull(r, ver[:])
+	require.NoError(t, err)
+	require.Equal(t, uint32(0), binary.LittleEndian.Uint32(ver[:]))
+	for n := 0; ; n++ {
+		var hdr [8]byte
+		k, err := io.ReadFull(r, hdr[:])
+		if k == 0 && (err == io.EOF || err == io.ErrUnexpectedEOF) {
+			t.Logf("blocks=%d", n)
+			return
+		}
+		require.NoError(t, err)
+		outSize := binary.LittleEndian.Uint32(hdr[0:4])
+		inSize := binary.LittleEndian.Uint32(hdr[4:8])
+		in := make([]byte, inSize)
+		_, err = io.ReadFull(r, in)
+		require.NoError(t, err, "block %d", n)
+		path := fmt.Sprintf("/tmp/fs25-fg02-block%d.oggre", n)
+		require.NoError(t, os.WriteFile(path, in, 0644))
+		t.Logf("block %d in=%d out=%d mag=%q flags=%02x -> %s", n, inSize, outSize, in[:min(5, len(in))], in[6], path)
 	}
 }

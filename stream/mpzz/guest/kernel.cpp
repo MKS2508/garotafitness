@@ -237,8 +237,9 @@ static int marshal_page(std::vector<uint8_t> *out, const Page *h, const uint8_t 
   return flush(1);
 }
 
-static int decode_page(Range *r, Model *models, uint16_t *terminal, uint8_t xor_flags, uint32_t gran_base,
-                       Page *h) {
+// laces=0: 167c0(a1!=0) — flags/granule/serial/seq/n only; dest supplies laces.
+static int decode_page_ex(Range *r, Model *models, uint16_t *terminal, uint8_t xor_flags, uint32_t gran_base,
+                          Page *h, int laces) {
   h->packets.clear();
   h->lacing.clear();
   h->flags = (uint8_t)(model_int(&models[0], r, 3, 0, 2, 0) ^ xor_flags);
@@ -248,7 +249,40 @@ static int decode_page(Range *r, Model *models, uint16_t *terminal, uint8_t xor_
   h->serial = model_pred(&models[3], model_int(&models[3], r, 5, 2, 4, 0), 1);
   h->sequence = model_pred(&models[4], model_int(&models[4], r, 5, 2, 4, 0), 2);
   uint32_t n = model_int(&models[5], r, 3, 0, 4, 1);
-  if (n > 255) return -1;
+  if (n > 255) {
+#ifdef HOST_DEBUG
+    fprintf(stderr, "  167c0 n=%u flags=%02x ser=%u err=%d\n", n, h->flags, h->serial, r->err);
+#endif
+    return -1;
+  }
+  if (!laces) {
+    h->packets.assign((int)n, 0);
+    return r->err ? -1 : 0;
+  }
+  for (uint32_t i = 0; i < n; i++) {
+    uint32_t size = model_int(&models[6], r, 4, 0, 6, 1);
+    if (size > (16u << 20)) return -1;
+    h->packets.push_back((int)size);
+    while (size >= 255) {
+      h->lacing.push_back(255);
+      size -= 255;
+    }
+    int term = 0;
+    if (size == 0 && i + 1 >= n) term = (int)range_bit(r, terminal);
+    if (size != 0 || i + 1 < n || term) h->lacing.push_back((uint8_t)size);
+  }
+  return r->err ? -1 : 0;
+}
+
+static int decode_page(Range *r, Model *models, uint16_t *terminal, uint8_t xor_flags, uint32_t gran_base,
+                       Page *h) {
+  return decode_page_ex(r, models, terminal, xor_flags, gran_base, h, 1);
+}
+
+static int fill_laces(Range *r, Model *models, uint16_t *terminal, Page *h) {
+  uint32_t n = (uint32_t)h->packets.size();
+  h->packets.clear();
+  h->lacing.clear();
   for (uint32_t i = 0; i < n; i++) {
     uint32_t size = model_int(&models[6], r, 4, 0, 6, 1);
     if (size > (16u << 20)) return -1;
@@ -1129,6 +1163,10 @@ static int apply_cache(Dec *d, uint32_t serial, std::vector<uint8_t> *pages, Vor
   if (d->headers.empty()) return -1;
   int back = (int)model_int(&d->models[53], &d->cmd, 5, 0, 2, 1);
   int n = (int)d->headers.size();
+#ifdef HOST_DEBUG
+  fprintf(stderr, "  cache back=%d of %d m53 nz=%u len=%u cmd_err=%d cmd_pos=%d/%d\n", back, n, d->models[53].nonzero,
+          d->models[53].length, d->cmd.err, d->cmd.pos, d->cmd.len);
+#endif
   if (back < 0 || back >= n) return -1;
   int index = n - 1 - back;
   CachedHdr &c = d->headers[index];
@@ -1154,10 +1192,19 @@ static int dest_copy(Dec *d, Audio *a, Page *first, std::vector<uint8_t> *out, u
       src = &d->dest;
   }
   if (src->empty()) return -1;
+  if (!first && out->empty()) {
+    std::vector<uint8_t> all = *src;
+    if (serial && rewrite_serial(&all, serial) < 0) return -1;
+    out->insert(out->end(), all.begin(), all.end());
+    (void)a;
+    return 0;
+  }
   std::vector<uint8_t> headers, audio;
   if (split_dest(*src, &headers, &audio) < 0) return -1;
-  if (rewrite_serial(&headers, serial) < 0) return -1;
-  out->insert(out->end(), headers.begin(), headers.end());
+  if (first || !out->empty()) {
+    if (rewrite_serial(&headers, serial) < 0) return -1;
+    out->insert(out->end(), headers.begin(), headers.end());
+  }
   if (audio.empty()) return -1;
   int off = 0;
   auto take = [&](Page *h) -> int {
@@ -1196,9 +1243,26 @@ static int dest_copy(Dec *d, Audio *a, Page *first, std::vector<uint8_t> *out, u
 static int decode_audio_pages(Dec *d, Audio *a, std::vector<uint8_t> *out, int page0) {
   for (int page = page0; page < (1 << 20); page++) {
     Page h;
-    if (decode_page(a->header, d->models, d->lace_term, 0, a->granule, &h) < 0) return -1;
+    if (decode_page(a->header, d->models, d->lace_term, 0, a->granule, &h) < 0) {
+#ifdef HOST_DEBUG
+      fprintf(stderr, "  audio 167c0 fail page=%d hdr_left=%d\n", page, a->header->len - a->header->pos);
+#endif
+      return -1;
+    }
     std::vector<uint8_t> body;
-    if (decode_audio_page(a, &h, &body) < 0) return -1;
+    if (decode_audio_page(a, &h, &body) < 0) {
+#ifdef HOST_DEBUG
+      fprintf(stderr, "  audio 02790 fail page=%d n=%zu last=%d fl=%02x body_left=%d leftover=%zu\n", page,
+              h.packets.size(), h.packets.empty() ? -1 : h.packets.back(), h.flags, a->body->len - a->body->pos,
+              a->leftover.size());
+#endif
+      return -1;
+    }
+#ifdef HOST_DEBUG
+    if (page < page0 + 3 || (h.flags & 4))
+      fprintf(stderr, "  audio page=%d n=%zu last=%d fl=%02x body=%zu\n", page, h.packets.size(),
+              h.packets.empty() ? -1 : h.packets.back(), h.flags, body.size());
+#endif
     if (marshal_page(out, &h, body.data(), (int)body.size()) < 0) return -1;
     if (h.flags & 4) return 0;
   }
@@ -1207,37 +1271,54 @@ static int decode_audio_pages(Dec *d, Audio *a, std::vector<uint8_t> *out, int p
 
 static int decode_stream(Dec *d, Audio *a, std::vector<uint8_t> *out) {
   Page h;
-  if (decode_page(a->header, d->models, d->lace_term, 2, 0, &h) < 0) return -1;
-  uint32_t serial = h.serial;
-  SetupDec ident{a->body, d->models, &d->probs, {}, &d->cache};
-  ident.w.write(1, 8);
-  for (int i = 0; i < 6; i++) ident.w.write((uint8_t)"vorbis"[i], 8);
-  ident.w.write(0, 32);
-  a->channels = (int)s_int(&ident, 9, 2, 1, 1, 0, 1, 8);
-  for (int i = 10; i < 14; i++) s_int(&ident, i, 5, 1, 4, 0, 1, 32);
-  uint32_t block = s_int(&ident, 14, 3, 1, 4, 0, 1, 8);
-  uint32_t framing = s_int(&ident, 15, 3, 1, 4, 0, 1, 8);
-  int small = block & 15, large = (int)(block >> 4);
-  if (a->channels < 1 || a->channels > 8 || small < 6 || large > 13 || small > large || (framing & 1) == 0)
+  if (decode_page(a->header, d->models, d->lace_term, 2, 0, &h) < 0) {
+#ifdef HOST_DEBUG
+    fprintf(stderr, "  ident 167c0 fail hdr_left=%d err=%d\n", a->header->len - a->header->pos, a->header->err);
+#endif
     return -1;
-  a->blocks[0] = 1 << small;
-  a->blocks[1] = 1 << large;
-  if (h.packets.size() == 1 && h.packets[0] == (int)ident.w.data.size()) {
-    if (marshal_page(out, &h, ident.w.data.data(), (int)ident.w.data.size()) < 0) return -1;
-  } else {
-    Page ih = h;
-    ih.flags = 2;
-    ih.sequence = 0;
-    ih.packets = {(int)ident.w.data.size()};
-    ih.lacing = {(uint8_t)ident.w.data.size()};
-    if (marshal_page(out, &ih, ident.w.data.data(), (int)ident.w.data.size()) < 0) return -1;
+  }
+  uint32_t serial = h.serial;
+  int ident_like = h.packets.size() == 1 && h.packets[0] <= 32;
+  int audio_first = h.packets.size() == 1 && h.packets[0] > 32;
+  if (ident_like) {
+    SetupDec ident{a->body, d->models, &d->probs, {}, &d->cache};
+    ident.w.write(1, 8);
+    for (int i = 0; i < 6; i++) ident.w.write((uint8_t)"vorbis"[i], 8);
+    ident.w.write(0, 32);
+    a->channels = (int)s_int(&ident, 9, 2, 1, 1, 0, 1, 8);
+    for (int i = 10; i < 14; i++) s_int(&ident, i, 5, 1, 4, 0, 1, 32);
+    uint32_t block = s_int(&ident, 14, 3, 1, 4, 0, 1, 8);
+    uint32_t framing = s_int(&ident, 15, 3, 1, 4, 0, 1, 8);
+    int small = block & 15, large = (int)(block >> 4);
+    if (a->channels < 1 || a->channels > 8 || small < 6 || large > 13 || small > large || (framing & 1) == 0)
+      return -1;
+    a->blocks[0] = 1 << small;
+    a->blocks[1] = 1 << large;
+    if (h.packets.size() == 1 && h.packets[0] == (int)ident.w.data.size()) {
+      if (marshal_page(out, &h, ident.w.data.data(), (int)ident.w.data.size()) < 0) return -1;
+    } else {
+      Page ih = h;
+      ih.flags = 2;
+      ih.sequence = 0;
+      ih.packets = {(int)ident.w.data.size()};
+      ih.lacing = {(uint8_t)ident.w.data.size()};
+      if (marshal_page(out, &ih, ident.w.data.data(), (int)ident.w.data.size()) < 0) return -1;
+    }
   }
 #ifdef HOST_DEBUG
-  fprintf(stderr, "  ident ch=%d ser=%u n=%zu body=%d\n", a->channels, serial, h.packets.size(),
-          (int)ident.w.data.size());
+  fprintf(stderr, "  ident ch=%d ser=%u n=%zu last=%d flags=%02x ident_like=%d audio_first=%d hdr_left=%d\n",
+          a->channels, serial, h.packets.size(), h.packets.empty() ? -1 : h.packets.back(), h.flags, ident_like,
+          audio_first, a->header->len - a->header->pos);
 #endif
   VorbisSetup config;
-  if (range_bit(&d->cmd, &d->ctrl[10])) {
+#ifdef HOST_DEBUG
+  int cmd_before_c10 = d->cmd.pos;
+#endif
+  uint32_t c10 = range_bit(&d->cmd, &d->ctrl[10]);
+#ifdef HOST_DEBUG
+  fprintf(stderr, "  ctrl10=%u ident_like=%d cmd=%d->%d/%d\n", c10, ident_like, cmd_before_c10, d->cmd.pos, d->cmd.len);
+#endif
+  if (c10) {
     std::vector<uint8_t> pages;
     CachedHdr *ent = 0;
     if (apply_cache(d, serial, &pages, &config, &ent) < 0) return -1;
@@ -1250,15 +1331,19 @@ static int decode_stream(Dec *d, Audio *a, std::vector<uint8_t> *out) {
 #ifdef HOST_DEBUG
     fprintf(stderr, "  cache headers=%zu\n", d->headers.size());
 #endif
+    a->setup = &config;
   } else {
     Page hdr;
-    if (decode_page(a->header, d->models, d->lace_term, 0, 0, &hdr) < 0) return -1;
+    // 167c0(a1!=0): n from model 5, laces from dest. n==2 still reads model 6.
+    if (decode_page_ex(a->header, d->models, d->lace_term, 0, 0, &hdr, 0) < 0) return -1;
     if (hdr.packets.size() != 2) {
 #ifdef HOST_DEBUG
-      fprintf(stderr, "  destcopy n=%zu\n", hdr.packets.size());
+      fprintf(stderr, "  destcopy n=%zu ser=%u fl=%02x hdr_left=%d\n", hdr.packets.size(), hdr.serial, hdr.flags,
+              a->header->len - a->header->pos);
 #endif
-      return dest_copy(d, a, &hdr, out, serial);
+      return dest_copy(d, a, 0, out, serial);
     }
+    if (fill_laces(a->header, d->models, d->lace_term, &hdr) < 0) return -1;
     std::vector<uint8_t> comment(hdr.packets[0]);
     int prev = 0;
     for (int i = 0; i < hdr.packets[0]; i++) {
@@ -1308,6 +1393,9 @@ static int decode_stream(Dec *d, Audio *a, std::vector<uint8_t> *out) {
 }
 
 static int next_record(Dec *d) {
+#ifdef HOST_DEBUG
+  int cmd0 = d->cmd.pos;
+#endif
   uint32_t b0 = range_bit(&d->cmd, &d->ctrl[d->previous]);
   if (d->cmd.err) return 1;  // EOF
   d->previous = b0;
@@ -1319,7 +1407,7 @@ static int next_record(Dec *d) {
     d->dest.insert(d->dest.end(), raw.begin(), raw.end());
     d->last_stream = raw;
 #ifdef HOST_DEBUG
-    fprintf(stderr, "raw n=%zu total=%u\n", raw.size(), d->dpos);
+    fprintf(stderr, "raw n=%zu total=%u cmd=%d/%d\n", raw.size(), d->dpos, d->cmd.pos, d->cmd.len);
 #endif
     return 0;
   }
@@ -1329,19 +1417,28 @@ static int next_record(Dec *d) {
     if (n == 0) return -1;
     int index = n - 1 - back % n;
     if (index < 0) index += n;
+    // RetDec 0x401752: esi+0x6008 is slot 3 (3*0x2000), same integer as 167c0 serial.
+    uint32_t serial3 = model_pred(&d->models[3], model_int(&d->models[3], &d->cmd, 5, 2, 4, 0), 1);
     std::vector<uint8_t> rec = d->streams[index];
+    if (rewrite_serial(&rec, serial3) < 0) return -1;
     if (append_out(d, rec.data(), rec.size()) < 0) return -2;
     d->dest.insert(d->dest.end(), rec.begin(), rec.end());
     d->last_stream = rec;
 #ifdef HOST_DEBUG
-    fprintf(stderr, "replay back=%d idx=%d n=%zu total=%u\n", back, index, rec.size(), d->dpos);
+    fprintf(stderr, "replay back=%d idx=%d n=%zu ser=%u nz=%u len=%u total=%u cmd=%d/%d\n", back, index, rec.size(),
+            serial3, d->models[3].nonzero, d->models[3].length, d->dpos, d->cmd.pos, d->cmd.len);
 #endif
     return 0;
   }
   int store = (int)range_bit(&d->cmd, &d->ctrl[6]);
   std::vector<uint8_t> frames[3];
   for (int i = 0; i < 3; i++)
-    if (read_frame(&d->cur, &frames[i]) < 0) return -1;
+    if (read_frame(&d->cur, &frames[i]) < 0) {
+#ifdef HOST_DEBUG
+      fprintf(stderr, "  read_frame %d fail leftover=%ld store=%d\n", i, (long)(d->cur.end - d->cur.p), store);
+#endif
+      return -1;
+    }
   static const int kSolid[] = {0, 1, 2, 3, 4, 5, 6, 7, 8, 17, 18, 19, 20, 21, 22, 23, 27, 28, 29, 30};
   if (d->flags & 8) {
     for (int i : kSolid) {
@@ -1356,6 +1453,10 @@ static int next_record(Dec *d) {
   range_init(&aux, frames[0].data(), (int)frames[0].size());
   range_init(&hdr, frames[1].data(), (int)frames[1].size());
   range_init(&bod, frames[2].data(), (int)frames[2].size());
+#ifdef HOST_DEBUG
+  fprintf(stderr, "  frames aux=%zu hdr=%zu bod=%zu store=%d b0=%u cmd=%d->%d/%d\n", frames[0].size(), frames[1].size(),
+          frames[2].size(), store, b0, cmd0, d->cmd.pos, d->cmd.len);
+#endif
   for (auto &b : d->cache.books) b.used = 0;
   Audio *audio = new Audio();
   audio->body = &bod;
@@ -1366,7 +1467,12 @@ static int next_record(Dec *d) {
   std::vector<uint8_t> rec;
   int st = decode_stream(d, audio, &rec);
   delete audio;
-  if (st < 0) return -1;
+  if (st < 0) {
+#ifdef HOST_DEBUG
+    fprintf(stderr, "  decode_stream fail recn=%zu\n", rec.size());
+#endif
+    return -1;
+  }
   if (append_out(d, rec.data(), rec.size()) < 0) return -2;
   d->last_stream = rec;
   d->dest.insert(d->dest.end(), rec.begin(), rec.end());
@@ -1407,6 +1513,7 @@ static int32_t decode_all(const uint8_t *src, uint32_t slen, uint8_t *dst, uint3
     if (rc < 0) {
 #ifdef HOST_DEBUG
       fprintf(stderr, "decode err total=%u\n", d.dpos);
+      return (int32_t)d.dpos;
 #endif
       return 0;
     }
