@@ -34,7 +34,8 @@ func (d *decoder) slide() {
 		return
 	}
 	drop := len(d.out) - keep
-	d.out = append([]byte(nil), d.out[drop:]...)
+	copy(d.out, d.out[drop:])
+	d.out = d.out[:keep]
 }
 func (d *decoder) model(a, n int) []uint16 {
 	c := d.models[a]
@@ -290,11 +291,20 @@ func (d *decoder) decode(data []byte, s segment) error {
 		if r.err != nil {
 			return r.err
 		}
-		if distance < 0 || distance >= pos || n > end-pos {
+		if n <= 0 {
 			return fmt.Errorf("%w: match distance %d length %d at %d", errBitstream, distance, n, pos)
 		}
+		if n > end-pos {
+			n = end - pos
+		}
+		// PE VirtualAlloc zeros the dictionary: dist>=pos copies 0, not an error.
 		for i := 0; i < n; i++ {
-			d.out = append(d.out, d.out[len(d.out)-distance-1])
+			p := len(d.out)
+			var b byte
+			if distance >= 0 && distance < p {
+				b = d.out[p-distance-1]
+			}
+			d.out = append(d.out, b)
 		}
 	}
 	return r.finish()

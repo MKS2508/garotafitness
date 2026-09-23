@@ -17,7 +17,6 @@ func (p *reconstructionPlan) resetStamps() {
 	p.lastUse = map[string]taskgroup.ID{}
 	p.prior = nil
 	p.unknown = nil
-	p.schedErr = nil
 }
 
 func (p *reconstructionPlan) scheduleHash(ctx context.Context, path string, deps []taskgroup.ID) {
@@ -30,40 +29,29 @@ func (p *reconstructionPlan) scheduleHash(ctx context.Context, path string, deps
 	}
 	p.hashed[path] = true
 	want := append([]byte(nil), sum...)
-	p.pending.Add(1)
-	_ = withSession(ctx, func(ctx context.Context) error {
-		taskgroup.Go(ctx, "md5 "+path, taskgroup.CPU, func(ctx context.Context, s *taskgroup.Status) error {
-			defer p.pending.Done()
-			if err := ctx.Err(); err != nil {
-				p.failSched(err)
-				return err
-			}
-			store, rel, err := p.store(lewpath.New("app", path).String())
-			if err != nil {
-				p.failSched(err)
-				return err
-			}
-			r, n, err := store.openRead(rel)
-			if err != nil {
-				p.failSched(err)
-				return err
-			}
-			defer r.Close()
-			got, err := hashReader(ctx, r, n, s)
-			if err != nil {
-				p.failSched(err)
-				return err
-			}
-			if !bytes.Equal(got, want) {
-				err := fmt.Errorf("installed checksum: %s: %x want %x", path, got, want)
-				p.failSched(err)
-				return err
-			}
-			slog.Info("verified", "path", path)
-			return nil
-		}, deps...)
+	taskgroup.Go(ctx, "md5 "+path, taskgroup.CPU, func(ctx context.Context, s *taskgroup.Status) error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		store, rel, err := p.store(lewpath.New("app", path).String())
+		if err != nil {
+			return err
+		}
+		r, n, err := store.openRead(rel)
+		if err != nil {
+			return err
+		}
+		defer r.Close()
+		got, err := hashReader(ctx, r, n, s)
+		if err != nil {
+			return err
+		}
+		if !bytes.Equal(got, want) {
+			return fmt.Errorf("installed checksum: %s: %x want %x", path, got, want)
+		}
+		slog.Info("verified", "path", path)
 		return nil
-	})
+	}, deps...)
 }
 
 func (p *reconstructionPlan) laterMayWrite(path string) bool {
@@ -106,11 +94,21 @@ func opsMayWrite(ops []setupdata.Operation, path string) bool {
 	return false
 }
 
+func (p *reconstructionPlan) runScheduled(ctx context.Context, name string, fn func(context.Context) error) error {
+	return withSession(ctx, func(ctx context.Context) error {
+		return taskgroup.GoIsolated(ctx, name, taskgroup.Control, func(ctx context.Context, _ *taskgroup.Status) error {
+			return fn(ctx)
+		})
+	})
+}
+
 func (p *reconstructionPlan) finishHashes(ctx context.Context) error {
-	for path := range p.want {
-		p.scheduleHash(ctx, path, nil)
-	}
-	if err := p.waitScheduled(); err != nil {
+	if err := p.runScheduled(ctx, "verify", func(ctx context.Context) error {
+		for path := range p.want {
+			p.scheduleHash(ctx, path, nil)
+		}
+		return nil
+	}); err != nil {
 		return err
 	}
 	for path := range p.want {
@@ -120,25 +118,6 @@ func (p *reconstructionPlan) finishHashes(ctx context.Context) error {
 	}
 	slog.Info("installed hashes verified", "files", len(p.want))
 	return nil
-}
-
-func (p *reconstructionPlan) waitScheduled() error {
-	p.pending.Wait()
-	p.mu.Lock()
-	err := p.schedErr
-	p.mu.Unlock()
-	return err
-}
-
-func (p *reconstructionPlan) failSched(err error) {
-	if err == nil {
-		return
-	}
-	p.mu.Lock()
-	if p.schedErr == nil {
-		p.schedErr = err
-	}
-	p.mu.Unlock()
 }
 
 func (p *reconstructionPlan) scheduleWords(ctx context.Context, w []string, cwd string, depth int) error {
@@ -199,10 +178,8 @@ func leafLabel(prog string, reads, writes []string) string {
 func (p *reconstructionPlan) scheduleLeaf(ctx context.Context, name string, w []string, cwd string, depth int, reads, writes []string, glob bool, pool taskgroup.PoolKind) error {
 	deps := p.fileDeps(reads, writes, glob)
 	label := leafLabel(name, reads, writes)
-	p.pending.Add(1)
 	id := taskgroup.Go(ctx, label, pool, func(ctx context.Context, s *taskgroup.Status) error {
 		defer s.Unit()()
-		defer p.pending.Done()
 		var err error
 		if pool == taskgroup.Control {
 			err = p.expandRecipe(ctx, w, cwd, depth)
@@ -210,10 +187,9 @@ func (p *reconstructionPlan) scheduleLeaf(ctx context.Context, name string, w []
 			err = p.words(ctx, w, cwd, depth)
 		}
 		if err != nil {
-			err = fmt.Errorf("%s: %w", label, err)
+			return fmt.Errorf("%s: %w", label, err)
 		}
-		p.failSched(err)
-		return err
+		return nil
 	}, deps...)
 	p.recordLeaf(id, reads, writes, glob)
 	return nil

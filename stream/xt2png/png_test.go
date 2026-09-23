@@ -3,6 +3,7 @@ package xt2png
 import (
 	"encoding/binary"
 	"hash/crc32"
+	"os"
 	"testing"
 )
 
@@ -16,6 +17,24 @@ func TestDecodePNGRoundTrip(t *testing.T) {
 	}
 	if string(got) != string(orig) {
 		t.Fatalf("got %d want %d", len(got), len(orig))
+	}
+}
+
+func TestDecodePNGFlagDeNested(t *testing.T) {
+	raw, err := os.ReadFile("testdata/flag-de.nested.bin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := &reader{hdr: Header{Method: "png+preflate"}}
+	got, err := r.restore(streamHeader{Kind: kindNested, OldSize: 86, NewSize: 1201, Codec: 5, Option: 3}, raw, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 86 {
+		t.Fatalf("got %d want 86", len(got))
+	}
+	if binary.LittleEndian.Uint64(got[:8]) != pngSig {
+		t.Fatalf("not png %x", got[:8])
 	}
 }
 

@@ -1,40 +1,34 @@
 package garotafitness
 
 import (
-	"cmp"
 	"context"
 	"fmt"
 	"io/fs"
-	"iter"
 	"log/slog"
-	"os"
-	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
 
 	lewpath "github.com/lewtec/lewkit/x/path"
 	"github.com/lewtec/lewkit/x/taskgroup"
+	"github.com/lucasew/garotafitness/internal/scratch"
 	"github.com/lucasew/garotafitness/setupdata"
 )
 
 type reconstructionPlan struct {
 	source     fs.FS
+	scratchDir string
 	app, temp  *reconstruction
 	volumes    map[string]Volume
 	remaining  map[string]int
 	decoded    map[string]*reconstruction
 	seen       map[string]bool
 	mu         sync.Mutex
-	ready      chan struct{}
 	decodeErr  error
-	prefetched bool
 	lastWrite  map[string]taskgroup.ID
 	lastUse    map[string]taskgroup.ID
 	prior      []taskgroup.ID
 	unknown    []taskgroup.ID
-	pending    sync.WaitGroup
-	schedErr   error
 	want       map[string][]byte
 	hashed     map[string]bool
 	ops        []setupdata.Operation
@@ -43,6 +37,13 @@ type reconstructionPlan struct {
 
 func newStaging() *reconstruction {
 	return &reconstruction{files: map[string][]byte{}, dirs: map[string]fs.FileMode{}}
+}
+
+func (p *reconstructionPlan) stagingCtx(ctx context.Context) context.Context {
+	if p == nil || p.scratchDir == "" {
+		return ctx
+	}
+	return scratch.WithDir(ctx, p.scratchDir)
 }
 
 // A volume is optional only when every extraction record that uses it is
@@ -150,34 +151,15 @@ func (p *reconstructionPlan) put(name string, b []byte) error {
 	for existing := range s.files {
 		if strings.EqualFold(existing, rel) {
 			delete(s.files, existing)
-			if s.dir != "" {
-				if pth, err := s.diskPath(existing); err == nil {
-					_ = os.Remove(pth)
+			if root := s.fs(); root != nil {
+				if pth, err := memberName(existing); err == nil {
+					_ = pth.Remove(root)
 				}
 			}
 		}
 	}
 	s.mu.Unlock()
-	if s.dir != "" {
-		pth, err := s.diskPath(rel)
-		if err != nil {
-			return err
-		}
-		if err := os.MkdirAll(filepath.Dir(pth), 0o755); err != nil {
-			return err
-		}
-		if err := os.WriteFile(pth, b, 0o644); err != nil {
-			return err
-		}
-		s.mu.Lock()
-		s.files[rel] = nil
-		s.mu.Unlock()
-		return nil
-	}
-	s.mu.Lock()
-	s.files[rel] = b
-	s.mu.Unlock()
-	return nil
+	return s.putFile(rel, b)
 }
 func (p *reconstructionPlan) matches(pattern string, dirs bool) ([]string, error) {
 	s, rel, err := p.store(pattern)
@@ -276,12 +258,14 @@ func (p *reconstructionPlan) extract(ctx context.Context, op setupdata.Operation
 			return err
 		}
 		slog.Info("extract reconstructed archive", "name", source)
-		staged, err = newDiskStaging()
+		staged, err = newDiskStaging(p.stagingCtx(ctx))
 		if err != nil {
 			return err
 		}
 		defer staged.Close()
-		if err := extractVolumeData(ctx, Extractor{Dest: staged}, source, data, nil); err != nil {
+		if err := taskgroup.GoIsolated(ctx, source, taskgroup.Control, func(ctx context.Context, s *taskgroup.Status) error {
+			return extractVolumeData(ctx, Extractor{Dest: staged}, source, data, s)
+		}); err != nil {
 			return err
 		}
 	}
@@ -318,7 +302,7 @@ func (p *reconstructionPlan) extract(ctx context.Context, op setupdata.Operation
 			}
 			files++
 			nbytes += n
-			slog.Info("placed", "path", mapped, "size", n, "from", source)
+			slog.Debug("placed", "path", mapped, "size", n, "from", source)
 			if dest == "app" || strings.HasPrefix(dest, "app/") {
 				p.scheduleHash(ctx, mapped, nil)
 			}
@@ -341,12 +325,15 @@ func (p *reconstructionPlan) run(ctx context.Context, ops []setupdata.Operation)
 		}
 	}
 	p.ops = ops
-	stop := p.prefetch(ctx, ops)
-	defer stop()
 	for i, op := range ops {
 		p.opi = i
-		if err := ctx.Err(); err != nil {
-			return err
+		if err := contextError(ctx); err != nil {
+			p.mu.Lock()
+			if p.decodeErr != nil {
+				err = p.decodeErr
+			}
+			p.mu.Unlock()
+			return fmt.Errorf("setup reconstruction record %d: %w", i+1, err)
 		}
 		slog.Info("reconstruction operation", "index", i+1, "kind", op.Kind, "source", op.Source, "dest", op.Dest, "program", op.Program, "workdir", op.WorkDir)
 		var err error
@@ -380,119 +367,44 @@ func (p *reconstructionPlan) run(ctx context.Context, ops []setupdata.Operation)
 	return p.finishHashes(ctx)
 }
 
-func (p *reconstructionPlan) prefetch(ctx context.Context, ops []setupdata.Operation) func() {
-	p.ready = make(chan struct{}, 1)
-	ctx, cancel := context.WithCancel(ctx)
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		var names []string
-		for name := range srcVolumes(ops, p.volumes) {
-			names = append(names, name)
-		}
-		slices.SortFunc(names, func(a, b string) int {
-			return cmp.Compare(fileSize(p.source, b), fileSize(p.source, a))
-		})
-		err := withSession(ctx, func(ctx context.Context) error {
-			return taskgroup.Each[string]{
-				Name:     "volumes",
-				PoolKind: taskgroup.Control,
-				Items:    names,
-				TaskName: func(_ int, name string) string { return name },
-				Fn: func(ctx context.Context, s *taskgroup.Status, name string) error {
-					s.Update(name)
-					slog.Info("extract volume", "name", name)
-					staged, err := newDiskStaging()
-					if err != nil {
-						return err
-					}
-					err = extractVolume(ctx, Extractor{Source: p.source, Dest: staged}, p.volumes[name], s)
-					if err != nil {
-						_ = staged.Close()
-					}
-					p.mu.Lock()
-					if err != nil {
-						if p.decodeErr == nil {
-							p.decodeErr = err
-						}
-					} else {
-						p.decoded[name] = staged
-						p.seen[name] = true
-					}
-					p.mu.Unlock()
-					select {
-					case p.ready <- struct{}{}:
-					default:
-					}
-					return err
-				},
-			}.Run(ctx)
-		})
-		p.mu.Lock()
-		if err != nil && p.decodeErr == nil {
+func (p *reconstructionPlan) waitDecoded(ctx context.Context, name string) (*reconstruction, error) {
+	p.mu.Lock()
+	if p.decodeErr != nil {
+		err := p.decodeErr
+		p.mu.Unlock()
+		return nil, err
+	}
+	if staged := p.decoded[name]; staged != nil {
+		p.seen[name] = true
+		p.mu.Unlock()
+		return staged, nil
+	}
+	p.mu.Unlock()
+	if err := contextError(ctx); err != nil {
+		return nil, err
+	}
+	if _, ok := p.volumes[name]; !ok {
+		return nil, fmt.Errorf("reconstruction: missing %s", name)
+	}
+	slog.Info("extract volume", "name", name)
+	staged, err := newDiskStaging(p.stagingCtx(ctx))
+	if err != nil {
+		return nil, err
+	}
+	err = taskgroup.GoIsolated(ctx, name, taskgroup.Control, func(ctx context.Context, s *taskgroup.Status) error {
+		return extractVolume(ctx, Extractor{Source: p.source, Dest: staged}, p.volumes[name], s)
+	})
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if err != nil {
+		_ = staged.Close()
+		err = fmt.Errorf("extract volume %s: %w", name, err)
+		if p.decodeErr == nil {
 			p.decodeErr = err
 		}
-		p.prefetched = true
-		p.mu.Unlock()
-		select {
-		case p.ready <- struct{}{}:
-		default:
-		}
-	}()
-	return func() {
-		cancel()
-		<-done
+		return nil, err
 	}
-}
-
-func (p *reconstructionPlan) waitDecoded(ctx context.Context, name string) (*reconstruction, error) {
-	for {
-		p.mu.Lock()
-		if p.decodeErr != nil {
-			err := p.decodeErr
-			p.mu.Unlock()
-			return nil, err
-		}
-		if staged := p.decoded[name]; staged != nil {
-			p.seen[name] = true
-			p.mu.Unlock()
-			return staged, nil
-		}
-		done := p.prefetched
-		p.mu.Unlock()
-		if done {
-			return nil, fmt.Errorf("reconstruction: missing %s", name)
-		}
-		select {
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		case <-p.ready:
-		}
-	}
-}
-
-func srcVolumes(ops []setupdata.Operation, have map[string]Volume) iter.Seq[string] {
-	return func(yield func(string) bool) {
-		seen := map[string]bool{}
-		for _, op := range ops {
-			if op.Kind != "extract" {
-				continue
-			}
-			source, err := virtualPath(op.Source, "")
-			if err != nil {
-				continue
-			}
-			name, ok := strings.CutPrefix(source, "src/")
-			if !ok || seen[name] {
-				continue
-			}
-			if _, exists := have[name]; !exists {
-				continue
-			}
-			seen[name] = true
-			if !yield(name) {
-				return
-			}
-		}
-	}
+	p.decoded[name] = staged
+	p.seen[name] = true
+	return staged, nil
 }

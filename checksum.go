@@ -11,6 +11,7 @@ import (
 	"io/fs"
 	"log/slog"
 	"strings"
+	"sync/atomic"
 
 	lewpath "github.com/lewtec/lewkit/x/path"
 	"github.com/lewtec/lewkit/x/taskgroup"
@@ -85,11 +86,19 @@ func scheduleChecksums(ctx context.Context, src fs.FS, vols []Volume, optional m
 		return err
 	}
 	return withSession(ctx, func(ctx context.Context) error {
-		for _, j := range jobs {
-			taskgroup.Go(ctx, "checksum "+j.file, taskgroup.IO, func(ctx context.Context, s *taskgroup.Status) error {
-				return checkVolume(ctx, src, j, s)
-			})
-		}
+		taskgroup.Go(ctx, "checksums", taskgroup.Control, func(ctx context.Context, s *taskgroup.Status) error {
+			total := int64(len(jobs))
+			s.Progress(0, total)
+			var done atomic.Int64
+			for _, j := range jobs {
+				taskgroup.Go(ctx, j.file, taskgroup.IO, func(ctx context.Context, st *taskgroup.Status) error {
+					err := checkVolume(ctx, src, j, st)
+					s.Progress(done.Add(1), total)
+					return err
+				})
+			}
+			return nil
+		})
 		return nil
 	})
 }

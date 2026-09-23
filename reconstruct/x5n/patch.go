@@ -5,9 +5,10 @@ import (
 	"context"
 	_ "embed"
 	"fmt"
-	"os"
-	"path/filepath"
+	"io"
 
+	lewpath "github.com/lewtec/lewkit/x/path"
+	"github.com/lucasew/garotafitness/internal/scratch"
 	"github.com/tetratelabs/wazero"
 	"github.com/tetratelabs/wazero/api"
 	"github.com/tetratelabs/wazero/imports/wasi_snapshot_preview1"
@@ -69,15 +70,25 @@ func Apply(ctx context.Context, oldFiles map[string][]byte, diff []byte) (map[st
 }
 
 func applySF20(ctx context.Context, old, diff []byte) ([]byte, error) {
-	dir, err := os.MkdirTemp("", "x5n-")
+	dir, err := scratch.MkdirTemp(ctx, "x5n-")
 	if err != nil {
 		return nil, fmt.Errorf("x5n: temp: %w", err)
 	}
-	defer os.RemoveAll(dir)
-	newPath := filepath.Join(dir, "new")
-	newf, err := os.OpenFile(newPath, os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0o600)
+	defer dir.Close()
+	p := lewpath.New("new")
+	f, err := p.Create(dir.Root())
 	if err != nil {
 		return nil, fmt.Errorf("x5n: temp: %w", err)
+	}
+	newf, ok := f.(interface {
+		io.Reader
+		io.WriterAt
+		io.Seeker
+		io.Closer
+	})
+	if !ok {
+		f.Close()
+		return nil, fmt.Errorf("x5n: temp: no random access")
 	}
 	defer newf.Close()
 
@@ -162,10 +173,10 @@ func applySF20(ctx context.Context, old, diff []byte) ([]byte, error) {
 	if res[0] != 1 {
 		return nil, fmt.Errorf("x5n: corrupt HDIFFSF20 patch")
 	}
-	if _, err := newf.Seek(0, 0); err != nil {
+	if _, err := newf.Seek(0, io.SeekStart); err != nil {
 		return nil, fmt.Errorf("x5n: rewind: %w", err)
 	}
-	out, err := os.ReadFile(newPath)
+	out, err := io.ReadAll(newf)
 	if err != nil {
 		return nil, fmt.Errorf("x5n: read new: %w", err)
 	}

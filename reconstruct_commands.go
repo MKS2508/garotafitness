@@ -56,11 +56,8 @@ func recipeWords(line string) ([]string, error) {
 
 func (p *reconstructionPlan) recipe(ctx context.Context, text, cwd string, depth int) error {
 	p.resetStamps()
-	return withSession(ctx, func(ctx context.Context) error {
+	return p.runScheduled(ctx, "recipe", func(ctx context.Context) error {
 		if err := p.recipeLines(ctx, text, cwd, depth); err != nil {
-			return err
-		}
-		if err := p.waitScheduled(); err != nil {
 			return err
 		}
 		for path := range p.lastWrite {
@@ -137,11 +134,12 @@ func (p *reconstructionPlan) command(ctx context.Context, program, args, cwd str
 	if err != nil {
 		return err
 	}
-	return withSession(ctx, func(ctx context.Context) error {
+	name := lewpath.New(strings.ReplaceAll(program, "\\", "/")).Name()
+	if name == "" || name == "." {
+		name = program
+	}
+	return p.runScheduled(ctx, name, func(ctx context.Context) error {
 		if err := p.scheduleWords(ctx, append([]string{program}, words...), cwd, depth+1); err != nil {
-			return err
-		}
-		if err := p.waitScheduled(); err != nil {
 			return err
 		}
 		for path := range p.lastWrite {
@@ -675,7 +673,7 @@ func (p *reconstructionPlan) x5nDir(ctx context.Context, patch, cwd string) erro
 		}
 		old[rel] = b
 	}
-	out, err := x5n.Apply(ctx, old, diff)
+	out, err := x5n.Apply(p.stagingCtx(ctx), old, diff)
 	if err != nil {
 		return err
 	}

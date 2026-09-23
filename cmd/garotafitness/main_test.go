@@ -28,4 +28,7 @@ func TestParseExtract(t *testing.T) {
 	app, err = cmd.Parse[cmd.App[root]]("--cpu", "2", "extract", src, dst)
 	require.NoError(t, err)
 	require.Equal(t, 2, app.Args.CPU.Value())
+
+	_, err = cmd.Parse[cmd.App[root]]("--pprof", ":6060", "extract", src, dst)
+	require.NoError(t, err)
 }

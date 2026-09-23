@@ -9,9 +9,11 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
+	"os"
 )
 
 const (
@@ -257,9 +259,26 @@ func (r *reader) takeStream(h streamHeader) (raw, ext []byte, err error) {
 	return payload, nil, nil
 }
 
+func unwrapNested(raw []byte) (payload, ext []byte, ok bool) {
+	if len(raw) < 8 {
+		return nil, nil, false
+	}
+	n := int(int32(binary.LittleEndian.Uint32(raw[:4])))
+	if n < 0 || 4+n+4 > len(raw) {
+		return nil, nil, false
+	}
+	es := int(int32(binary.LittleEndian.Uint32(raw[4+n : 4+n+4])))
+	if es < 0 || 4+n+4+es > len(raw) {
+		return nil, nil, false
+	}
+	return raw[4 : 4+n], raw[4+n+4 : 4+n+4+es], true
+}
+
 func (r *reader) restore(h streamHeader, raw, ext []byte) ([]byte, error) {
 	if h.Kind&kindNested == kindNested {
-		if int32(len(raw)) == h.OldSize || h.OldSize == 0 {
+		if p, e, ok := unwrapNested(raw); ok {
+			raw, ext = p, e
+		} else if int32(len(raw)) == h.OldSize || h.OldSize == 0 {
 			return raw, nil
 		}
 	}
@@ -268,7 +287,11 @@ func (r *reader) restore(h streamHeader, raw, ext []byte) ([]byte, error) {
 	case h.Codec == codecZLib && sub == subPNG, sub == subPNG && containsToken(r.hdr.Method, "png"):
 		out, err := decodePNG(raw, int(h.OldSize))
 		if err != nil {
-			return nil, err
+			if p := os.Getenv("XT2PNG_DUMP"); p != "" {
+				_ = os.WriteFile(p, raw, 0o644)
+				_ = os.WriteFile(p+".meta", []byte(fmt.Sprintf("codec=%d opt=%#x kind=%d old=%d new=%d raw=%d\n", h.Codec, uint32(h.Option), h.Kind, h.OldSize, h.NewSize, len(raw))), 0o644)
+			}
+			return nil, fmt.Errorf("%w codec=%d opt=%#x kind=%d old=%d new=%d raw=%d", err, h.Codec, uint32(h.Option), h.Kind, h.OldSize, h.NewSize, len(raw))
 		}
 		if h.OldSize > 0 && int32(len(out)) != h.OldSize {
 			return nil, fmt.Errorf("xt2png: png got %d want %d", len(out), h.OldSize)

@@ -21,7 +21,7 @@ func decodePNG(in []byte, want int) ([]byte, error) {
 		return nil, fmt.Errorf("xt2png: short png")
 	}
 	if binary.LittleEndian.Uint64(in[:8]) != pngSig+1 {
-		return nil, fmt.Errorf("xt2png: png signature")
+		return nil, fmt.Errorf("xt2png: png signature sig=%016x len=%d want=%d", binary.LittleEndian.Uint64(in[:8]), len(in), want)
 	}
 	if binary.LittleEndian.Uint32(in[12:16]) != pngIHDR {
 		return nil, fmt.Errorf("xt2png: png header")

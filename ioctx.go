@@ -11,8 +11,15 @@ type ctxReader struct {
 	r   io.Reader
 }
 
+func contextError(ctx context.Context) error {
+	if ctx.Err() == nil {
+		return nil
+	}
+	return context.Cause(ctx)
+}
+
 func (c ctxReader) Read(p []byte) (int, error) {
-	if err := c.ctx.Err(); err != nil {
+	if err := contextError(c.ctx); err != nil {
 		return 0, err
 	}
 	return c.r.Read(p)
@@ -24,7 +31,7 @@ type ctxAt struct {
 }
 
 func (c ctxAt) ReadAt(p []byte, off int64) (int, error) {
-	if err := c.ctx.Err(); err != nil {
+	if err := contextError(c.ctx); err != nil {
 		return 0, err
 	}
 	return c.ra.ReadAt(p, off)

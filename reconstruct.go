@@ -11,49 +11,56 @@ import (
 	"iter"
 	"log/slog"
 	"maps"
-	"os"
-	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
 
+	lewfs "github.com/lewtec/lewkit/x/fs"
 	lewpath "github.com/lewtec/lewkit/x/path"
 	"github.com/lewtec/lewkit/x/taskgroup"
+	"github.com/lucasew/garotafitness/internal/scratch"
 	"github.com/lucasew/garotafitness/setupdata"
 )
 
 // reconstruction holds extract intermediates until Dest is written.
-// dir set: file bodies live on disk (FS25-sized trees). dir empty: tests keep []byte.
+// stage set: file bodies live on disk (FS25-sized trees). stage nil: tests keep []byte.
 type reconstruction struct {
 	mu    sync.Mutex
-	dir   string
+	stage *scratch.Dir
 	files map[string][]byte
 	dirs  map[string]fs.FileMode
 }
 
-func newDiskStaging() (*reconstruction, error) {
-	dir, err := os.MkdirTemp("", "garotafitness-stage-*")
+func newDiskStaging(ctx context.Context) (*reconstruction, error) {
+	d, err := scratch.MkdirTemp(ctx, "garotafitness-stage-*")
 	if err != nil {
 		return nil, err
 	}
-	return &reconstruction{dir: dir, files: map[string][]byte{}, dirs: map[string]fs.FileMode{}}, nil
+	return &reconstruction{stage: d, files: map[string][]byte{}, dirs: map[string]fs.FileMode{}}, nil
+}
+
+func (s *reconstruction) fs() *lewpath.Root {
+	if s == nil || s.stage == nil {
+		return nil
+	}
+	return s.stage.Root()
+}
+
+func destStageDir(dst Dest) (string, error) {
+	d, ok := dst.(DirDest)
+	if !ok || d.fs == nil {
+		return "", fmt.Errorf("scratch: dest is not a directory")
+	}
+	return d.Name(), nil
 }
 
 func (s *reconstruction) Close() error {
-	if s == nil || s.dir == "" {
+	if s == nil || s.stage == nil {
 		return nil
 	}
-	dir := s.dir
-	s.dir = ""
-	return os.RemoveAll(dir)
-}
-
-func (s *reconstruction) diskPath(name string) (string, error) {
-	p, err := memberName(name)
-	if err != nil {
-		return "", err
-	}
-	return filepath.Join(s.dir, filepath.FromSlash(p.String())), nil
+	d := s.stage
+	s.stage = nil
+	return d.Close()
 }
 
 func (s *reconstruction) lookup(name string) (string, []byte, error) {
@@ -87,22 +94,26 @@ func (s *reconstruction) MkdirAll(name string, mode fs.FileMode) error {
 }
 
 func (s *reconstruction) Create(name string) (io.WriteCloser, error) {
-	if _, err := memberName(name); err != nil {
+	p, err := memberName(name)
+	if err != nil {
 		return nil, err
 	}
-	if s.dir != "" {
-		p, err := s.diskPath(name)
+	if root := s.fs(); root != nil {
+		if parent := p.Parent(); parent.String() != "." {
+			if err := parent.MkdirAll(root, 0o755); err != nil {
+				return nil, err
+			}
+		}
+		f, err := p.Create(root)
 		if err != nil {
 			return nil, err
 		}
-		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
-			return nil, err
+		w, ok := f.(io.WriteCloser)
+		if !ok {
+			f.Close()
+			return nil, fmt.Errorf("reconstruction: create %s: not writable", name)
 		}
-		f, err := os.Create(p)
-		if err != nil {
-			return nil, err
-		}
-		return &diskStaged{File: f, store: s, name: name}, nil
+		return &diskStaged{WriteCloser: w, store: s, name: name}, nil
 	}
 	return &stagedFile{store: s, name: name}, nil
 }
@@ -121,13 +132,13 @@ func (f *stagedFile) Close() error {
 }
 
 type diskStaged struct {
-	*os.File
+	io.WriteCloser
 	store *reconstruction
 	name  string
 }
 
 func (f *diskStaged) Close() error {
-	err := f.File.Close()
+	err := f.WriteCloser.Close()
 	f.store.mu.Lock()
 	f.store.files[f.name] = nil
 	f.store.mu.Unlock()
@@ -135,18 +146,17 @@ func (f *diskStaged) Close() error {
 }
 
 func (s *reconstruction) putFile(name string, b []byte) error {
-	if _, err := memberName(name); err != nil {
+	p, err := memberName(name)
+	if err != nil {
 		return err
 	}
-	if s.dir != "" {
-		p, err := s.diskPath(name)
-		if err != nil {
-			return err
+	if root := s.fs(); root != nil {
+		if parent := p.Parent(); parent.String() != "." {
+			if err := parent.MkdirAll(root, 0o755); err != nil {
+				return err
+			}
 		}
-		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
-			return err
-		}
-		if err := os.WriteFile(p, b, 0o644); err != nil {
+		if err := p.WriteFile(root, b, 0o644); err != nil {
 			return err
 		}
 		s.mu.Lock()
@@ -167,12 +177,12 @@ func (s *reconstruction) require(name string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	if s.dir != "" {
-		p, err := s.diskPath(key)
+	if root := s.fs(); root != nil {
+		p, err := memberName(key)
 		if err != nil {
 			return nil, err
 		}
-		return os.ReadFile(p)
+		return p.ReadFile(root)
 	}
 	return b, nil
 }
@@ -181,7 +191,7 @@ func (s *reconstruction) ingest(ctx context.Context, src *reconstruction, srcNam
 	if _, err := memberName(dstName); err != nil {
 		return 0, err
 	}
-	if s.dir == "" && src.dir == "" {
+	if s.fs() == nil && src.fs() == nil {
 		b, err := src.require(srcName)
 		if err != nil {
 			return 0, err
@@ -196,27 +206,22 @@ func (s *reconstruction) ingest(ctx context.Context, src *reconstruction, srcNam
 		return 0, err
 	}
 	defer r.Close()
-	if s.dir != "" {
-		p, err := s.diskPath(dstName)
+	if root := s.fs(); root != nil {
+		p, err := memberName(dstName)
 		if err != nil {
 			return 0, err
 		}
-		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
-			return 0, err
-		}
-		w, err := os.Create(p)
+		_ = p.Remove(root)
+		err = lewfs.Copy(ctx, root, func(yield func(lewfs.File, error) bool) {
+			yield(lewfs.File{Name: p, Mode: 0o644, Size: n, Reader: r}, nil)
+		})
 		if err != nil {
 			return 0, err
-		}
-		copied, err := copyCtx(ctx, w, r)
-		closeErr := w.Close()
-		if err != nil {
-			return copied, err
 		}
 		s.mu.Lock()
 		s.files[dstName] = nil
 		s.mu.Unlock()
-		return copied, closeErr
+		return n, nil
 	}
 	b, err := io.ReadAll(ctxReader{ctx, r})
 	if err != nil {
@@ -234,17 +239,17 @@ func (s *reconstruction) ingest(ctx context.Context, src *reconstruction, srcNam
 func (s *reconstruction) openRead(name string) (io.ReadCloser, int64, error) {
 	s.mu.Lock()
 	key, b, err := s.lookup(name)
-	dir := s.dir
+	root := s.fs()
 	s.mu.Unlock()
 	if err != nil {
 		return nil, 0, err
 	}
-	if dir != "" {
-		p, err := s.diskPath(key)
+	if root != nil {
+		p, err := memberName(key)
 		if err != nil {
 			return nil, 0, err
 		}
-		f, err := os.Open(p)
+		f, err := p.Open(root)
 		if err != nil {
 			return nil, 0, err
 		}
@@ -259,17 +264,22 @@ func (s *reconstruction) openRead(name string) (io.ReadCloser, int64, error) {
 }
 
 func (e Extractor) extractReconstructed(ctx context.Context, vols []Volume, setup setupdata.Info) error {
-	s, err := newDiskStaging()
+	stageDir, err := destStageDir(e.Dest)
+	if err != nil {
+		return err
+	}
+	ctx = scratch.WithDir(ctx, stageDir)
+	s, err := newDiskStaging(ctx)
 	if err != nil {
 		return err
 	}
 	defer s.Close()
-	temp, err := newDiskStaging()
+	temp, err := newDiskStaging(ctx)
 	if err != nil {
 		return err
 	}
 	defer temp.Close()
-	runner := &reconstructionPlan{source: e.Source, app: s, temp: temp, volumes: map[string]Volume{}, remaining: map[string]int{}, decoded: map[string]*reconstruction{}, seen: map[string]bool{}}
+	runner := &reconstructionPlan{source: e.Source, app: s, temp: temp, scratchDir: stageDir, volumes: map[string]Volume{}, remaining: map[string]int{}, decoded: map[string]*reconstruction{}, seen: map[string]bool{}}
 	for _, v := range vols {
 		runner.volumes[v.Name] = v
 	}

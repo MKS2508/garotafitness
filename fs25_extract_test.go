@@ -4,18 +4,33 @@ import (
 	"io"
 	"testing"
 
+	"github.com/lewtec/lewkit/x/test"
 	"github.com/lucasew/garotafitness/internal/corpus"
+	"github.com/lucasew/garotafitness/internal/scratch"
 	"github.com/stretchr/testify/require"
 )
 
 func TestFS25ExtractSmallVolumes(t *testing.T) {
 	src := corpus.OpenEnv(t, fs25Corpus)
+	t.Run("diskStaging", func(t *testing.T) {
+		d, err := OpenDirDest(t.TempDir())
+		require.NoError(t, err)
+		test.CloseOnCleanup(t, d)
+		dir, err := destStageDir(d)
+		require.NoError(t, err)
+		ctx := scratch.WithDir(t.Context(), dir)
+		staged, err := newDiskStaging(ctx)
+		require.NoError(t, err)
+		test.CloseOnCleanup(t, staged)
+		require.NoError(t, extractVolume(ctx, Extractor{Source: src, Dest: staged}, Volume{Name: "fg-08.bin"}, nil))
+		require.NotEmpty(t, staged.files)
+	})
 	for _, name := range []string{"fg-03.bin", "fg-04.bin", "fg-06.bin", "fg-07.bin", "fg-08.bin"} {
 		t.Run(name, func(t *testing.T) {
 			out := t.TempDir()
 			dst, err := OpenDirDest(out)
 			require.NoError(t, err)
-			t.Cleanup(func() { dst.Close() })
+			test.CloseOnCleanup(t, dst)
 			require.NoError(t, extractVolume(t.Context(), Extractor{Source: src, Dest: dst}, Volume{Name: name}, nil))
 		})
 	}
