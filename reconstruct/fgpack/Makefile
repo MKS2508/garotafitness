@@ -1,6 +1,8 @@
 EMCC ?= emcc
 SRC = ../../third_party/lzma-sdk19
 SOURCES = guest/main.c $(SRC)/LzmaEnc.c $(SRC)/LzFind.c $(SRC)/Alloc.c
+GUEST = fgpack.wasm
+include ../../make/committed-wasm.mk
 
 fgpack.wasm: $(SOURCES) $(wildcard $(SRC)/*.h)
 	$(EMCC) -O1 -std=c11 -D_7ZIP_ST --no-entry -I$(SRC) $(SOURCES) \

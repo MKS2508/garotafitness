@@ -1,5 +1,7 @@
 EMCC ?= emcc
 SRC = ../../third_party/hdiffpatch
+GUEST = hpatch.wasm
+include ../../make/committed-wasm.mk
 
 hpatch.wasm: guest/main.c $(wildcard $(SRC)/*.[ch])
 	$(EMCC) -O0 -std=gnu11 --no-entry -I$(SRC) guest/main.c $(SRC)/patch.c \

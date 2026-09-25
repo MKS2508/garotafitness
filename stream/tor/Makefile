@@ -4,8 +4,7 @@ ARC = ../../third_party/freearc/Compression
 GUEST = tordec.wasm
 SRC = guest/main.cpp $(ARC)/Common.cpp
 
-.PHONY: guest clean
-guest: $(GUEST)
+include ../../make/committed-wasm.mk
 
 $(GUEST): $(SRC) $(ARC)/Tornado/Tornado.cpp
 	$(EMCC) $(SRC) \

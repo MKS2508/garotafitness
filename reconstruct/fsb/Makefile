@@ -1,6 +1,8 @@
 EMCC ?= emcc
 SRC = ../../third_party/oggvorbis2fsb5
 SOURCES = $(SRC)/oggvorbis2fsb5.c $(wildcard $(SRC)/ogg/src/*.c) $(wildcard $(SRC)/vorbis/lib/*.c)
+GUEST = fsb.wasm
+include ../../make/committed-wasm.mk
 
 # Match the project's emscripten/binaryen combination; see stream/srep/Makefile.
 fsb.wasm: $(SOURCES) $(wildcard $(SRC)/vorbis/lib/*.h $(SRC)/vorbis/include/vorbis/*.h $(SRC)/ogg/src/*.h $(SRC)/ogg/include/ogg/*.h $(SRC)/include/*.h)

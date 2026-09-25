@@ -16,12 +16,7 @@ PREFLATE_SRC = $(addprefix $(PREFLATE_STAGED)/,$(PREFLATE_NAMES)) \
 	$(addprefix $(PREFLATE_STAGED)/support/,$(PREFLATE_SUPPORT))
 SRC = guest/main.cpp guest/task_pool.cpp $(PREFLATE_SRC)
 
-.PHONY: guest clean
-# Committed wasm is enough when the precomp submodule is not checked out (CI).
-guest:
-	@if [ -f $(PRECOMP)/contrib/preflate/preflate_decoder.cpp ]; then $(MAKE) $(GUEST); \
-	elif [ -f $(GUEST) ]; then echo "xt2png: using committed $(GUEST)"; \
-	else echo "xt2png: missing $(GUEST) and $(PRECOMP)"; exit 1; fi
+include ../../make/committed-wasm.mk
 
 $(PREFLATE_STAGED)/.stamp: guest/support/task_pool.h
 	mkdir -p $(PREFLATE_STAGED)/support

@@ -1,5 +1,7 @@
 EMCC ?= emcc
 SRC = ../../third_party/xdelta3
+GUEST = xdelta.wasm
+include ../../make/committed-wasm.mk
 
 xdelta.wasm: guest/main.c guest/stream.c $(SRC)/xdelta3.c $(wildcard $(SRC)/*.h)
 	$(EMCC) -O1 -std=gnu11 --no-entry -I$(SRC) guest/main.c guest/stream.c $(SRC)/xdelta3.c \

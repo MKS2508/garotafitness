@@ -4,8 +4,7 @@ EMCC ?= emcc
 GUEST = srepdec.wasm
 SRC = guest/main.cpp
 
-.PHONY: guest
-guest: $(GUEST)
+include ../../make/committed-wasm.mk
 
 $(GUEST): $(SRC) guest/kernel.h
 	$(EMCC) $(SRC) \
