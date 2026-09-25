@@ -1,8 +1,12 @@
 package garotafitness
 
 import (
+	"bytes"
+	"fmt"
 	"hash/crc32"
 	"io"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/lucasew/garotafitness/internal/corpus"
@@ -10,6 +14,7 @@ import (
 )
 
 func TestFS25Fg01FirstMember(t *testing.T) {
+	skipHeavySolid(t)
 	src := corpus.OpenEnv(t, fs25Corpus)
 	vol, err := src.Open("fg-01.bin")
 	require.NoError(t, err)
@@ -65,6 +70,7 @@ func TestFS25Fg01FirstMember(t *testing.T) {
 }
 
 func TestFS25Fg01PastFirstStream(t *testing.T) {
+	skipHeavySolid(t)
 	src := corpus.OpenEnv(t, fs25Corpus)
 	vol, err := src.Open("fg-01.bin")
 	require.NoError(t, err)
@@ -121,4 +127,105 @@ func TestFS25Fg01PastFirstStream(t *testing.T) {
 	}
 	t.Logf("checked %d files through offset %d", checked, off)
 	require.Greater(t, checked, 1)
+}
+
+func TestFS25Fg01FlagDePNGMembers(t *testing.T) {
+	src := corpus.OpenEnv(t, fs25Corpus)
+	vol, err := src.Open("fg-01.bin")
+	require.NoError(t, err)
+	defer vol.Close()
+	st, err := vol.Stat()
+	require.NoError(t, err)
+	ra := vol.(interface {
+		ReadAt([]byte, int64) (int, error)
+	})
+	v, err := parseVolumeAt("fg-01.bin", ra, st.Size())
+	require.NoError(t, err)
+	var s *solid
+	for g := range groupSolids(v.Members) {
+		if len(g.pipe) > 0 && g.pipe[0].Algo == AlgoXT2PNG {
+			cp := g
+			s = &cp
+			break
+		}
+	}
+	require.NotNil(t, s)
+	hit := -1
+	for i, m := range s.files {
+		if m.Path == "web_data/img/icons/flag-de.png" {
+			hit = i
+			break
+		}
+	}
+	require.GreaterOrEqual(t, hit, 0, "flag-de.png not in fg-01 xt2png solid")
+	var uncomp uint64
+	for i, m := range s.files {
+		if i >= hit-8 && i <= hit+3 {
+			t.Logf("[%d] %s size=%d crc=%08x uncompOff=%d", i, m.Path, m.Size, m.CRC, uncomp)
+		}
+		uncomp += m.Size
+	}
+	t.Logf("solid members=%d compressed=%d uncompressed=%d flag-de index=%d", len(s.files), s.csz, uncomp, hit)
+}
+
+func TestFS25Fg01DecodeUntilFlagDe(t *testing.T) {
+	skipHeavySolid(t)
+	src := corpus.OpenEnv(t, fs25Corpus)
+	vol, err := src.Open("fg-01.bin")
+	require.NoError(t, err)
+	defer vol.Close()
+	st, err := vol.Stat()
+	require.NoError(t, err)
+	ra := vol.(interface {
+		ReadAt([]byte, int64) (int, error)
+	})
+	v, err := parseVolumeAt("fg-01.bin", ra, st.Size())
+	require.NoError(t, err)
+	var s *solid
+	for g := range groupSolids(v.Members) {
+		if len(g.pipe) > 0 && g.pipe[0].Algo == AlgoXT2PNG {
+			cp := g
+			s = &cp
+			break
+		}
+	}
+	require.NotNil(t, s)
+	var r io.Reader = io.NewSectionReader(ra, s.off, int64(s.csz))
+	var closers []io.Closer
+	t.Cleanup(func() {
+		for i := len(closers) - 1; i >= 0; i-- {
+			closers[i].Close()
+		}
+	})
+	for i := len(s.pipe) - 1; i >= 0; i-- {
+		dec, err := Decode(t.Context(), r, s.pipe[i])
+		require.NoError(t, err, s.pipe[i])
+		closers = append(closers, dec)
+		r = dec
+	}
+	outDir := "/tmp/xt2png-members"
+	require.NoError(t, os.MkdirAll(outDir, 0o755))
+	for i, m := range s.files {
+		dst := io.Writer(io.Discard)
+		var buf bytes.Buffer
+		if i >= 42765 {
+			dst = &buf
+		}
+		n, err := io.Copy(dst, io.LimitReader(r, int64(m.Size)))
+		if err != nil {
+			t.Fatalf("member[%d] %s size=%d copied=%d: %v", i, m.Path, m.Size, n, err)
+		}
+		if n != int64(m.Size) {
+			t.Fatalf("member[%d] %s short %d want %d", i, m.Path, n, m.Size)
+		}
+		if i >= 42765 {
+			name := filepath.Base(m.Path)
+			require.NoError(t, os.WriteFile(filepath.Join(outDir, fmt.Sprintf("%05d-%s", i, name)), buf.Bytes(), 0o644))
+		}
+		if m.Path == "web_data/img/icons/flag-de.png" {
+			t.Logf("flag-de.png decoded ok n=%d", n)
+			return
+		}
+	}
+	t.Fatal("flag-de.png not reached")
 }

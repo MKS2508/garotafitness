@@ -26,8 +26,13 @@ func Bytes(ctx context.Context, code []byte, name string, capacity int, inputs .
 	if _, err := wasi_snapshot_preview1.Instantiate(ctx, rt); err != nil {
 		return nil, err
 	}
-	if _, err := rt.NewHostModuleBuilder("env").NewFunctionBuilder().
-		WithFunc(func(uint32) {}).Export("emscripten_notify_memory_growth").Instantiate(ctx); err != nil {
+	if _, err := rt.NewHostModuleBuilder("env").
+		NewFunctionBuilder().WithFunc(func(uint32) {}).Export("emscripten_notify_memory_growth").
+		NewFunctionBuilder().WithFunc(func(uint32, uint32, uint32, uint32, uint32) uint32 { return 0 }).Export("host_pread").
+		NewFunctionBuilder().WithFunc(func(uint32, uint32, uint32, uint32, uint32) uint32 { return 0 }).Export("host_pwrite").
+		NewFunctionBuilder().WithFunc(func(uint32) uint32 { return 0 }).Export("host_size_lo").
+		NewFunctionBuilder().WithFunc(func(uint32) uint32 { return 0 }).Export("host_size_hi").
+		Instantiate(ctx); err != nil {
 		return nil, err
 	}
 	mod, err := rt.InstantiateWithConfig(ctx, code, wazero.NewModuleConfig().WithStartFunctions("_initialize"))

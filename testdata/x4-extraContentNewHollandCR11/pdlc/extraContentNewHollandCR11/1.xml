@@ -1,0 +1,21 @@
+﻿<?xml version="1.0" encoding="utf-8" standalone="no" ?>
+<modDesc descVersion="90">
+    <author>GIANTS Software</author>
+    <version>1.0.0.0</version>
+    <productId>A1E4BA1B</productId>
+    <title>
+        <en>New Holland CR11 Gold Edition</en>
+    </title>
+
+    <description>
+        <en>Extra Content - New Holland CR11 Gold Edition</en>
+    </description>
+
+    <iconFilename>icon_cr11Gold.png</iconFilename>
+
+    <isSelectable>false</isSelectable>
+
+    <extraContent>
+        <key>R3FCH11E</key>
+    </extraContent>
+</modDesc>

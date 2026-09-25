@@ -265,6 +265,7 @@ func TestFS25Fg02FirstStreamPages(t *testing.T) {
 }
 
 func TestFS25Fg02DumpAllMpzzBlocks(t *testing.T) {
+	skipHeavySolid(t)
 	src := corpus.OpenEnv(t, fs25Corpus)
 	vol, err := src.Open("fg-02.bin")
 	require.NoError(t, err)

@@ -12,6 +12,13 @@ import (
 
 const fs25Corpus = "GAROTAFITNESS_CORPUS_FS25"
 
+func skipHeavySolid(t *testing.T) {
+	t.Helper()
+	if os.Getenv("GAROTAFITNESS_HEAVY") == "" {
+		t.Skip("set GAROTAFITNESS_HEAVY=1 to decode large FS25 solids")
+	}
+}
+
 func TestFarmingSimulator25Setup(t *testing.T) {
 	f := corpus.FileEnv(t, fs25Corpus, "setup.exe")
 	info, err := setupdata.Scan(f)

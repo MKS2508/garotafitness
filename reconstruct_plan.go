@@ -1,8 +1,10 @@
 package garotafitness
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"io/fs"
 	"log/slog"
 	"slices"
@@ -125,6 +127,37 @@ func (p *reconstructionPlan) store(name string) (*reconstruction, string, error)
 		return nil, "", fmt.Errorf("reconstruction: cannot write %s", name)
 	}
 }
+func (p *reconstructionPlan) openAt(name string) (io.ReaderAt, io.Closer, int64, error) {
+	s, rel, err := p.store(name)
+	if err != nil {
+		return nil, nil, 0, err
+	}
+	p.mu.Lock()
+	rc, size, err := s.openRead(rel)
+	p.mu.Unlock()
+	if err != nil {
+		return nil, nil, 0, err
+	}
+	if ra, ok := rc.(io.ReaderAt); ok {
+		return ra, rc, size, nil
+	}
+	b, err := io.ReadAll(rc)
+	rc.Close()
+	if err != nil {
+		return nil, nil, 0, err
+	}
+	r := bytes.NewReader(b)
+	return r, io.NopCloser(r), int64(len(b)), nil
+}
+
+func (p *reconstructionPlan) create(name string) (io.WriteCloser, error) {
+	s, rel, err := p.store(name)
+	if err != nil {
+		return nil, err
+	}
+	return s.Create(rel)
+}
+
 func (p *reconstructionPlan) read(name string) ([]byte, error) {
 	if strings.HasPrefix(name, "src/") {
 		return lewpath.New(strings.TrimPrefix(name, "src/")).ReadFile(p.source)

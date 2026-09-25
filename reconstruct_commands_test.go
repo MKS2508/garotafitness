@@ -3,6 +3,7 @@ package garotafitness
 import (
 	"bytes"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"io"
 	"strings"
@@ -84,6 +85,16 @@ func TestRecipeFGPackTwoArgAndSevenZ(t *testing.T) {
 	require.NoError(t, p.recipe(t.Context(), `7z.exe a -ms=off -mtc=off -mtm=off -mta=off -m0=lzma:x=4:d=512k inner.fgpack inner\*.fgu`, "app", 0))
 	require.Greater(t, len(p.app.files["inner.fgpack"]), 32)
 	require.Equal(t, []byte{0x37, 0x7a, 0xbc, 0xaf, 0x27, 0x1c}, p.app.files["inner.fgpack"][:6])
+}
+
+func TestX4UnknownHash(t *testing.T) {
+	p := testPlan()
+	p.temp.files["x4.exe"] = []byte("not-giants")
+	p.app.files["dlc/1.xml"] = []byte("hi")
+	err := p.recipe(t.Context(), `"{tmp}\x4.exe" dlc out.dlc 02 01`, "app", 0)
+	if !errors.Is(err, errUnknownToolHash) {
+		t.Fatalf("err %v", err)
+	}
 }
 
 func TestRecipeRejectsUnknownProgramsAndEscapes(t *testing.T) {

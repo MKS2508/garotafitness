@@ -15,6 +15,16 @@ func literalPatch(data []byte) []byte {
 	return append(b, 1, byte(len(data)))
 }
 
+func TestApplyStreamMatchesMemory(t *testing.T) {
+	want := []byte("hello, patch")
+	patch := literalPatch(want)
+	var buf bytes.Buffer
+	err := ApplyStream(t.Context(), bytes.NewReader(nil), 0, bytes.NewReader(patch), int64(len(patch)), SeqWriter(&buf))
+	if err != nil || !bytes.Equal(buf.Bytes(), want) {
+		t.Fatalf("%q %v", buf.Bytes(), err)
+	}
+}
+
 func TestApplyWindowChecksum(t *testing.T) {
 	want := []byte("hello, patch")
 	patch := literalPatch(want)

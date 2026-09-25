@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -67,10 +68,8 @@ func (p *reconstructionPlan) recipe(ctx context.Context, text, cwd string, depth
 	})
 }
 
-func (p *reconstructionPlan) recipeLines(ctx context.Context, text, cwd string, depth int) error {
-	if depth > 32 {
-		return fmt.Errorf("recursive reconstruction recipe")
-	}
+func recipeCommands(text string) ([]string, error) {
+	var out []string
 	text = strings.ReplaceAll(text, "\r\n", "\n")
 	for _, line := range strings.Split(text, "\n") {
 		line = strings.TrimSpace(line)
@@ -98,17 +97,11 @@ func (p *reconstructionPlan) recipeLines(ctx context.Context, text, cwd string, 
 				continue
 			}
 			if i < len(line) && (i+1 >= len(line) || line[i+1] != '&') {
-				return fmt.Errorf("unsupported recipe command separator")
+				return nil, fmt.Errorf("unsupported recipe command separator")
 			}
 			part := strings.TrimSpace(line[start:i])
-			words, err := recipeWords(part)
-			if err != nil {
-				return err
-			}
-			if len(words) > 0 {
-				if err := p.scheduleWords(ctx, words, cwd, depth+1); err != nil {
-					return fmt.Errorf("recipe %q: %w", part, err)
-				}
+			if part != "" {
+				out = append(out, part)
 			}
 			if i < len(line) {
 				i++
@@ -116,7 +109,30 @@ func (p *reconstructionPlan) recipeLines(ctx context.Context, text, cwd string, 
 			}
 		}
 		if quoted {
-			return fmt.Errorf("unterminated recipe quote")
+			return nil, fmt.Errorf("unterminated recipe quote")
+		}
+	}
+	return out, nil
+}
+
+func (p *reconstructionPlan) recipeLines(ctx context.Context, text, cwd string, depth int) error {
+	if depth > 32 {
+		return fmt.Errorf("recursive reconstruction recipe")
+	}
+	cmds, err := recipeCommands(text)
+	if err != nil {
+		return err
+	}
+	for _, part := range cmds {
+		words, err := recipeWords(part)
+		if err != nil {
+			return err
+		}
+		if len(words) == 0 {
+			continue
+		}
+		if err := p.scheduleWords(ctx, words, cwd, depth+1); err != nil {
+			return fmt.Errorf("recipe %q: %w", part, err)
 		}
 	}
 	return nil
@@ -157,6 +173,7 @@ func (p *reconstructionPlan) words(ctx context.Context, w []string, cwd string, 
 		return fmt.Errorf("recursive reconstruction recipe")
 	}
 	name := strings.ToLower(lewpath.New(strings.ReplaceAll(w[0], "\\", "/")).Name())
+	name = reconstructToolset.canonical(name, p.toolDigest(w[0], cwd))
 	a := w[1:]
 	slog.Info("recipe command", "program", name, "args", a, "cwd", cwd)
 	resolve := func(s string) (string, error) { return virtualPath(s, cwd) }
@@ -419,9 +436,9 @@ func (p *reconstructionPlan) words(ctx context.Context, w []string, cwd string, 
 	case "x5n.exe":
 		return p.x5n(ctx, a, cwd)
 	case "x4.exe":
-		return p.x4(a, cwd)
+		return p.x4(w[0], a, cwd)
 	case "fgpack.exe":
-		options, source, dest, err := packingOptions(a)
+		_, source, dest, err := packingOptions(a)
 		if err != nil {
 			return err
 		}
@@ -437,7 +454,7 @@ func (p *reconstructionPlan) words(ctx context.Context, w []string, cwd string, 
 		if err != nil {
 			return err
 		}
-		out, err := fgpack.EncodeWithOptions(ctx, b, options)
+		out, err := reconstructToolset.run(ctx, name, p.toolDigest(w[0], cwd), b, a, p.fileChecksum(dst))
 		if err != nil {
 			return err
 		}
@@ -468,15 +485,11 @@ func (p *reconstructionPlan) words(ctx context.Context, w []string, cwd string, 
 		if !decode || source == "" || len(files) != 2 {
 			return fmt.Errorf("invalid xdelta parameters")
 		}
-		old, err := read(source)
+		srcPath, err := resolve(source)
 		if err != nil {
 			return err
 		}
-		diff, err := read(files[0])
-		if err != nil {
-			return err
-		}
-		out, err := xdelta.Apply(ctx, old, diff)
+		diffPath, err := resolve(files[0])
 		if err != nil {
 			return err
 		}
@@ -484,8 +497,30 @@ func (p *reconstructionPlan) words(ctx context.Context, w []string, cwd string, 
 		if err != nil {
 			return err
 		}
-		slog.Info("xdelta", "src", source, "diff", files[0], "dst", dst, "in", len(old), "out", len(out))
-		return put(files[1], out)
+		oldR, oldC, oldN, err := p.openAt(srcPath)
+		if err != nil {
+			return err
+		}
+		defer oldC.Close()
+		diffR, diffC, diffN, err := p.openAt(diffPath)
+		if err != nil {
+			return err
+		}
+		defer diffC.Close()
+		w, err := p.create(dst)
+		if err != nil {
+			return err
+		}
+		seq := xdelta.SeqWriter(w)
+		err = xdelta.ApplyStream(ctx, oldR, oldN, diffR, diffN, seq)
+		if closeErr := w.Close(); err == nil {
+			err = closeErr
+		}
+		if err != nil {
+			return err
+		}
+		slog.Info("xdelta", "src", source, "diff", files[0], "dst", dst, "in", oldN, "out", seq.Size())
+		return nil
 	case "x3.exe":
 		if len(a) != 1 {
 			return fmt.Errorf("invalid RTPatch parameters")
@@ -686,9 +721,16 @@ func (p *reconstructionPlan) x5nDir(ctx context.Context, patch, cwd string) erro
 	return nil
 }
 
-func (p *reconstructionPlan) x4(a []string, cwd string) error {
+func (p *reconstructionPlan) x4(program string, a []string, cwd string) error {
 	if len(a) != 4 {
 		return fmt.Errorf("invalid x4 parameters")
+	}
+	c, err := reconstructToolset.match("x4.exe", p.toolDigest(program, cwd))
+	if err != nil {
+		return err
+	}
+	if c.id != "defarm" {
+		return fmt.Errorf("reconstruct tool %s: no packer", c.id)
 	}
 	src, err := virtualPath(a[0], cwd)
 	if err != nil {
@@ -713,22 +755,33 @@ func (p *reconstructionPlan) x4(a []string, cwd string) error {
 		}
 	}
 	p.mu.Unlock()
-	var files []x4.File
-	for _, m := range matches {
-		b, err := p.read(m)
-		if err != nil {
-			return err
-		}
-		name := strings.TrimPrefix(m, src+"/")
-		if name == m {
-			name = lewpath.New(m).Name()
-		}
-		files = append(files, x4.File{Name: name, Data: b})
-	}
-	out, err := x4.Pack(files, a[2], a[3])
+	sort.Strings(matches)
+	key, err := x4.Key(a[2], a[3])
 	if err != nil {
 		return err
 	}
-	slog.Info("x4", "src", src, "dst", dst, "files", len(files), "out", len(out))
-	return p.put(dst, out)
+	w, err := p.create(dst)
+	if err != nil {
+		return err
+	}
+	var wrote int64
+	for _, m := range matches {
+		b, err := p.read(m)
+		if err != nil {
+			w.Close()
+			return err
+		}
+		block := x4.EncryptBody(b, key)
+		n, err := w.Write(block)
+		wrote += int64(n)
+		if err != nil {
+			w.Close()
+			return err
+		}
+	}
+	if err := w.Close(); err != nil {
+		return err
+	}
+	slog.Info(c.id, "src", src, "dst", dst, "files", len(matches), "out", wrote)
+	return nil
 }
