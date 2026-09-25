@@ -149,7 +149,7 @@ func TestStagingCtxRebindsWithDir(t *testing.T) {
 		t.Fatal(err)
 	}
 	p := &reconstructionPlan{scratchDir: dir}
-	s, err := newDiskStaging(p.stagingCtx(context.Background()))
+	s, err := newDiskStaging(p.stagingCtx(t.Context()))
 	if err != nil {
 		t.Fatal(err)
 	}
