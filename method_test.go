@@ -38,6 +38,12 @@ func TestParseAlgoAliases(t *testing.T) {
 	if ParseAlgo("xt3u") != AlgoXT3U {
 		t.Fatal("xt3u")
 	}
+	if ParseAlgo("xt2png") != AlgoXT2PNG {
+		t.Fatal("xt2png")
+	}
+	if ParseAlgo("tor") != AlgoTOR {
+		t.Fatal("tor")
+	}
 	if ParseAlgo("nope").Known() {
 		t.Fatal("want invalid")
 	}

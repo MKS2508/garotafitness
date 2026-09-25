@@ -45,16 +45,16 @@ description = "Run all tests"
 depends = ["test:*"]
 
 [tasks."build:srep"]
-description = "Build SREP guest wasm with conda emscripten"
+description = "SREP guest: committed wasm, or emcc when WASM_REBUILD=1"
 run = "make -C stream/srep"
 
 [tasks."build:pref"]
-description = "Build Precomp restore guest wasm with conda emscripten"
+description = "Precomp restore guest: committed wasm, or emcc when WASM_REBUILD=1"
 run = "make -C stream/pref"
 
 [tasks."build:reconstruction"]
-description = "Build the reconstruction and soundtrack WASM modules"
-run = "make -C reconstruct/fsb && make -C reconstruct/x5 && make -C reconstruct/fgpack && make -C reconstruct/xdelta && make -C stream/mpz && make -C stream/pref"
+description = "Reconstruction guests: committed wasm, or emcc when WASM_REBUILD=1"
+run = "make -C reconstruct/fsb && make -C reconstruct/x5 && make -C reconstruct/x5n && make -C reconstruct/sevenz && make -C reconstruct/fgpack && make -C reconstruct/xdelta && make -C stream/mpz && make -C stream/pref && make -C stream/xt2png && make -C stream/tor"
 
 [tasks."build:garotafitness"]
 description = "Build garotafitness into bin/"

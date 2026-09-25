@@ -45,6 +45,7 @@ var known = []string{
 	"storing",
 	"fgpack",
 	"magic2",
+	"xt2png",
 	"xt3u",
 	"lzma2",
 	"ppmd",

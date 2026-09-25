@@ -59,12 +59,7 @@ SRCS = $(GIF_SRC) $(BZIP_SRC) $(ZLIB_SRC) $(PACKARI_SRC) $(PACKJPG_SRC) $(PACKMP
 	$(LZMA_SRC) $(BRUNSLI_SRC) $(BROTLI_SRC) $(PREFLATE_SRC) \
 	$(PRECOMP)/precomp.cpp guest/main.cpp guest/memfs.c guest/task_pool.cpp guest/otf_stub.cpp
 
-.PHONY: guest clean
-# Committed wasm is enough when the precomp submodule is not checked out (CI).
-guest:
-	@if [ -f $(PRECOMP)/precomp.cpp ]; then $(MAKE) $(GUEST); \
-	elif [ -f $(GUEST) ]; then echo "pref: using committed $(GUEST)"; \
-	else echo "pref: missing $(GUEST) and $(PRECOMP)"; exit 1; fi
+include ../../make/committed-wasm.mk
 
 $(PREFLATE_STAGED)/.stamp: guest/support/task_pool.h
 	mkdir -p $(PREFLATE_STAGED)/support

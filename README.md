@@ -26,7 +26,8 @@ memory. Manifest entries resolve relative to the manifest destination recorded
 in setup metadata. MPZ soundtrack decoding can take several minutes.
 
 Supported recipe operations include FSB remuxing, LZMA packing, x2, RTPatch,
-HDiffPatch, VCDIFF, file moves, copies, and deletions. The extractor parses these
+HDiffPatch, VCDIFF, 7z packing, Giants .dlc/.gar packing, file moves, copies,
+and deletions. The extractor parses these
 operations and calls its own implementations; it never runs the batch files or
 their executables. Unknown operations and unresolved reconstruction arguments
 return errors.
@@ -42,12 +43,14 @@ fixtures also exercise different filenames, archive destinations, file
 counts, compression options, manifest locations, and optional-volume names.
 Run regression tests with `go test -p 1 ./...`. Corpus tests skip unless
 `GAROTAFITNESS_CORPUS` points at the RimWorld repack directory. The Songs
-of Conquest tests use `GAROTAFITNESS_CORPUS_SOC`. The full extraction
-tests also need `GAROTAFITNESS_FULL_EXTRACT`:
+of Conquest tests use `GAROTAFITNESS_CORPUS_SOC`. Farming Simulator 25
+tests use `GAROTAFITNESS_CORPUS_FS25`. The full extraction tests also need
+`GAROTAFITNESS_FULL_EXTRACT`:
 
 ```sh
 GAROTAFITNESS_CORPUS='/path/to/RimWorld [FitGirl Repack]' go test -p 1 ./...
 GAROTAFITNESS_CORPUS='/path/to/RimWorld [FitGirl Repack]' GAROTAFITNESS_FULL_EXTRACT=all go test . -run '^TestExtractInstalledRimWorld$' -timeout=1h
 GAROTAFITNESS_CORPUS='/path/to/RimWorld [FitGirl Repack]' GAROTAFITNESS_FULL_EXTRACT=required go test . -run '^TestExtractInstalledRimWorld$' -timeout=1h
 GAROTAFITNESS_CORPUS_SOC='/path/to/Songs of Conquest [FitGirl Repack]' go test -p 1 ./...
+GAROTAFITNESS_CORPUS_FS25='/path/to/Farming Simulator 25 [FitGirl Repack]' go test -p 1 ./...
 ```

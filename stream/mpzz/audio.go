@@ -65,6 +65,7 @@ type audioDecoder struct {
 	floorLengths                                      [64][256]byte
 	granule                                           uint32
 	w                                                 bitWriter
+	leftover                                          []byte
 }
 
 func (a *audioDecoder) tree(r *rangeDecoder, base, n int) uint32 {

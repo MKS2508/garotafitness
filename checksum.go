@@ -11,6 +11,7 @@ import (
 	"io/fs"
 	"log/slog"
 	"strings"
+	"sync/atomic"
 
 	lewpath "github.com/lewtec/lewkit/x/path"
 	"github.com/lewtec/lewkit/x/taskgroup"
@@ -63,8 +64,8 @@ func collectChecksums(src fs.FS, vols []Volume, optional map[string]bool) ([]che
 	return jobs, nil
 }
 
-func checkVolume(ctx context.Context, src fs.FS, j checksumJob) error {
-	got, err := hashFile(ctx, src, j.name)
+func checkVolume(ctx context.Context, src fs.FS, j checksumJob, st *taskgroup.Status) error {
+	got, err := hashFile(ctx, src, j.name, st)
 	if err != nil {
 		return err
 	}
@@ -85,12 +86,19 @@ func scheduleChecksums(ctx context.Context, src fs.FS, vols []Volume, optional m
 		return err
 	}
 	return withSession(ctx, func(ctx context.Context) error {
-		for _, j := range jobs {
-			taskgroup.Go(ctx, "checksum "+j.file, taskgroup.IO, func(ctx context.Context, s *taskgroup.Status) error {
-				defer s.Unit()()
-				return checkVolume(ctx, src, j)
-			})
-		}
+		taskgroup.Go(ctx, "checksums", taskgroup.Control, func(ctx context.Context, s *taskgroup.Status) error {
+			total := int64(len(jobs))
+			s.Progress(0, total)
+			var done atomic.Int64
+			for _, j := range jobs {
+				taskgroup.Go(ctx, j.file, taskgroup.IO, func(ctx context.Context, st *taskgroup.Status) error {
+					err := checkVolume(ctx, src, j, st)
+					s.Progress(done.Add(1), total)
+					return err
+				})
+			}
+			return nil
+		})
 		return nil
 	})
 }
@@ -106,8 +114,8 @@ func verifyChecksums(ctx context.Context, src fs.FS, vols []Volume, optional map
 			PoolKind: taskgroup.IO,
 			Items:    jobs,
 			TaskName: func(_ int, j checksumJob) string { return j.file },
-			Fn: func(ctx context.Context, _ *taskgroup.Status, j checksumJob) error {
-				return checkVolume(ctx, src, j)
+			Fn: func(ctx context.Context, st *taskgroup.Status, j checksumJob) error {
+				return checkVolume(ctx, src, j, st)
 			},
 		}.Run(ctx)
 	})
@@ -139,15 +147,35 @@ func parseMD5(r io.Reader) (map[string]string, error) {
 	return out, nil
 }
 
-func hashFile(ctx context.Context, src fs.FS, name string) (string, error) {
+func hashReader(ctx context.Context, r io.Reader, total int64, s *taskgroup.Status) ([]byte, error) {
+	if s != nil {
+		if total > 0 {
+			s.Progress(0, total)
+			r = countReader{r: r, p: &byteProgress{s: s, total: total}}
+		} else {
+			s.Progress(0, -1)
+		}
+	}
+	h := md5.New()
+	if _, err := copyCtx(ctx, h, r); err != nil {
+		return nil, err
+	}
+	return h.Sum(nil), nil
+}
+
+func hashFile(ctx context.Context, src fs.FS, name string, s *taskgroup.Status) (string, error) {
 	f, err := lewpath.New(name).Open(src)
 	if err != nil {
 		return "", fmt.Errorf("checksum open %s: %w", name, err)
 	}
 	defer f.Close()
-	h := md5.New()
-	if _, err := copyCtx(ctx, h, f); err != nil {
+	var total int64
+	if st, err := f.Stat(); err == nil {
+		total = st.Size()
+	}
+	sum, err := hashReader(ctx, f, total, s)
+	if err != nil {
 		return "", fmt.Errorf("checksum hash %s: %w", name, err)
 	}
-	return hex.EncodeToString(h.Sum(nil)), nil
+	return hex.EncodeToString(sum), nil
 }

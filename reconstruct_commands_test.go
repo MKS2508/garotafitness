@@ -3,6 +3,7 @@ package garotafitness
 import (
 	"bytes"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"io"
 	"strings"
@@ -72,6 +73,28 @@ func TestRecipeReplacementsAndManifestAppend(t *testing.T) {
 	require.NoError(t, p.command(t.Context(), "{cmd}", "/C \"copy /b base.md5+*.addon&&del *.addon\"", "app/Verify", 0))
 	require.Equal(t, "first\nsecond\n", string(p.app.files["Verify/base.md5"]))
 	require.NotContains(t, p.app.files, "Verify/extra.addon")
+}
+
+func TestRecipeFGPackTwoArgAndSevenZ(t *testing.T) {
+	p := testPlan()
+	p.app.files["inner/0001.fgu"] = []byte("one")
+	p.app.files["inner/0002.fgu"] = []byte("two")
+	p.app.files["0001.shapes"] = []byte("shape")
+	require.NoError(t, p.recipe(t.Context(), `fgpack.exe 0001.shapes 0001.fgr_`, "app", 0))
+	require.Greater(t, len(p.app.files["0001.fgr_"]), 0)
+	require.NoError(t, p.recipe(t.Context(), `7z.exe a -ms=off -mtc=off -mtm=off -mta=off -m0=lzma:x=4:d=512k inner.fgpack inner\*.fgu`, "app", 0))
+	require.Greater(t, len(p.app.files["inner.fgpack"]), 32)
+	require.Equal(t, []byte{0x37, 0x7a, 0xbc, 0xaf, 0x27, 0x1c}, p.app.files["inner.fgpack"][:6])
+}
+
+func TestX4UnknownHash(t *testing.T) {
+	p := testPlan()
+	p.temp.files["x4.exe"] = []byte("not-giants")
+	p.app.files["dlc/1.xml"] = []byte("hi")
+	err := p.recipe(t.Context(), `"{tmp}\x4.exe" dlc out.dlc 02 01`, "app", 0)
+	if !errors.Is(err, errUnknownToolHash) {
+		t.Fatalf("err %v", err)
+	}
 }
 
 func TestRecipeRejectsUnknownProgramsAndEscapes(t *testing.T) {

@@ -6,13 +6,33 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
+	"sync"
 )
 
 var (
 	errNil       = errors.New("magic2: nil reader")
 	errClosed    = errors.New("magic2: closed")
 	errBitstream = errors.New("magic2: invalid bitstream")
+	packedPool   sync.Pool
 )
+
+func getPacked(n int) []byte {
+	if n == 0 {
+		return nil
+	}
+	if b, ok := packedPool.Get().(*[]byte); ok && cap(*b) >= n {
+		return (*b)[:n]
+	}
+	return make([]byte, n)
+}
+
+func putPacked(b []byte) {
+	if cap(b) == 0 {
+		return
+	}
+	packedPool.Put(&b)
+}
 
 func NewReader(src io.Reader) (io.ReadCloser, error) {
 	if src == nil {
@@ -22,7 +42,7 @@ func NewReader(src io.Reader) (io.ReadCloser, error) {
 	if err != nil {
 		return nil, err
 	}
-	if h.Independent || h.Workers != 1 || h.LongDistance || h.ROLZ || !h.Mixed || h.LiteralMode != 0 || h.ColorMode > 3 || h.AlphaMode > 4 || h.ImageMode != 0 {
+	if h.LongDistance || h.ROLZ || !h.Mixed || h.LiteralMode != 0 || h.ColorMode > 3 || h.AlphaMode > 4 || h.ImageMode != 0 {
 		return nil, fmt.Errorf("magic2: unsupported decoder options %+v", h)
 	}
 	return &reader{src: src, decoder: newDecoder(h)}, nil
@@ -76,7 +96,7 @@ func (r *reader) fill() error {
 			return err
 		}
 		if capacity == 0 || n < 4 || n > 16<<20 {
-			return errBitstream
+			return fmt.Errorf("%w: metadata capacity=%d n=%d", errBitstream, capacity, n)
 		}
 		data := make([]byte, n)
 		if _, err := readRequired(r.src, data); err != nil {
@@ -94,29 +114,51 @@ func (r *reader) fill() error {
 			return err
 		}
 		if r.chunks.remaining != 0 {
-			return errBitstream
+			return fmt.Errorf("%w: trailer leftover %d", errBitstream, r.chunks.remaining)
 		}
 		n, err := read32(r.src)
 		if err != nil {
 			return err
 		}
-		if n != 0 {
-			return errBitstream
+		if n == 0 {
+			return io.EOF
 		}
-		return io.EOF
+		// Independent workers concatenate another metadata+segment run.
+		// Official single-stream files write a 0 word here.
+		if n < 4 || n > 16<<20 {
+			return fmt.Errorf("%w: next frame n=%d", errBitstream, n)
+		}
+		data := make([]byte, n)
+		if _, err := readRequired(r.src, data); err != nil {
+			return err
+		}
+		r.metadata = newMetadata(data)
+		r.chunks.remaining = 0
+		if r.decoder.header.Independent {
+			r.decoder = newDecoder(r.decoder.header)
+		}
+		return r.fill()
 	}
-	if s.size == 0 || s.size > 512<<20 || s.packed == 0 || s.packed > 512<<20 || uint64(len(r.decoder.out))+uint64(s.size) > 1<<30 {
-		return errBitstream
+	if s.size == 0 || s.size > 512<<20 || s.packed == 0 || s.packed > 512<<20 {
+		return fmt.Errorf("%w: segment option=%d size=%d packed=%d aux=%d", errBitstream, s.option, s.size, s.packed, s.aux)
 	}
-	data := make([]byte, s.packed)
+	data := getPacked(int(s.packed))
 	if _, err := readRequired(&r.chunks, data); err != nil {
+		putPacked(data)
 		return err
 	}
 	start := len(r.decoder.out)
 	if err := r.decoder.decode(data, s); err != nil {
+		if p := os.Getenv("MAGIC2_DUMP"); p != "" {
+			_ = os.WriteFile(p, data, 0o644)
+			_ = os.WriteFile(p+".meta", []byte(fmt.Sprintf("start=%d option=%d size=%d packed=%d aux=%d independent=%v workers=%d\n", start, s.option, s.size, s.packed, s.aux, r.decoder.header.Independent, r.decoder.header.Workers)), 0o644)
+		}
+		putPacked(data)
 		return fmt.Errorf("magic2: segment at %d (option %d, size %d, aux %d): %w", start, s.option, s.size, s.aux, err)
 	}
-	r.buf = r.decoder.out[start:]
+	putPacked(data)
+	r.buf = append(r.buf[:0], r.decoder.out[start:]...)
+	r.decoder.slide()
 	return nil
 }
 
@@ -135,7 +177,7 @@ func (r *chunkReader) Read(p []byte) (int, error) {
 			return 0, err
 		}
 		if n == 0 || n > r.capacity {
-			return 0, errBitstream
+			return 0, fmt.Errorf("%w: chunk n=%d capacity=%d", errBitstream, n, r.capacity)
 		}
 		r.remaining = n
 	}

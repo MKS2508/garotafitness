@@ -44,20 +44,39 @@ func TestNewReader(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			rc, err := NewReader(tt.in)
+			rc, err := NewReader(t.Context(), tt.in)
 			if rc != nil {
-				t.Fatalf("NewReader(%s) reader = %T; want nil", tt.name, rc)
+				t.Fatalf("NewReader(ctx, %s) reader = %T; want nil", tt.name, rc)
 			}
 			if !errors.Is(err, tt.want) {
-				t.Fatalf("NewReader(%s) err = %v; want %v", tt.name, err, tt.want)
+				t.Fatalf("NewReader(ctx, %s) err = %v; want %v", tt.name, err, tt.want)
 			}
 		})
 	}
 }
 
+func TestSlurpReaderAt(t *testing.T) {
+	t.Parallel()
+	want := []byte("OGGRE\x00\x09hello")
+	got, err := slurp(bytes.NewReader(want))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, want) {
+		t.Fatalf("ReaderAt slurp %q; want %q", got, want)
+	}
+	got, err = slurp(io.LimitReader(bytes.NewReader(want), int64(len(want))))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, want) {
+		t.Fatalf("ReadAll slurp %q; want %q", got, want)
+	}
+}
+
 func TestNewReaderOGGRE(t *testing.T) {
 	t.Parallel()
-	rc, err := NewReader(bytes.NewReader(fg01Head))
+	rc, err := NewReader(t.Context(), bytes.NewReader(fg01Head))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -106,7 +125,7 @@ func TestNewReaderCorpus(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { sr.Close() })
-	rc, err := NewReader(sr)
+	rc, err := NewReader(t.Context(), sr)
 	if err != nil {
 		t.Fatal(err)
 	}

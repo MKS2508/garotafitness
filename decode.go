@@ -18,6 +18,8 @@ import (
 	"github.com/lucasew/garotafitness/stream/rzw"
 	"github.com/lucasew/garotafitness/stream/srep"
 	"github.com/lucasew/garotafitness/stream/storing"
+	"github.com/lucasew/garotafitness/stream/tor"
+	"github.com/lucasew/garotafitness/stream/xt2png"
 	"github.com/lucasew/garotafitness/stream/xt3u"
 )
 
@@ -72,7 +74,7 @@ func decodeAtom(ctx context.Context, r io.Reader, a Atom) (io.ReadCloser, error)
 	case AlgoDispack:
 		return dispack.NewReader(r)
 	case AlgoMPZZ:
-		return mpzz.NewReader(r)
+		return mpzz.NewReader(ctx, r)
 	case AlgoMPZ:
 		return mpz.NewReader(ctx, r)
 	case AlgoRZW:
@@ -85,6 +87,10 @@ func decodeAtom(ctx context.Context, r io.Reader, a Atom) (io.ReadCloser, error)
 		return pref.NewReader(ctx, r)
 	case AlgoXT3U:
 		return xt3u.NewReader(ctx, r)
+	case AlgoXT2PNG:
+		return xt2png.NewReader(ctx, r)
+	case AlgoTOR:
+		return tor.NewReader(ctx, r)
 	default:
 		return nil, unknownEncoderError(a)
 	}

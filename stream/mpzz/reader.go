@@ -2,6 +2,8 @@
 package mpzz
 
 import (
+	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -17,18 +19,19 @@ const (
 )
 
 // NewReader wraps an OGGRE stream as compress/gzip does.
-//
-// The native decoder reconstructs Ogg packets from separate command,
-// header, and audio ranges. Solid streams share adaptive codebook models.
-func NewReader(r io.Reader) (io.ReadCloser, error) {
+// Decompression runs in the wasm guest (single-threaded wazero).
+func NewReader(ctx context.Context, r io.Reader) (io.ReadCloser, error) {
 	if r == nil {
 		return nil, errNil
 	}
-	h, err := parseHeader(r)
+	src, err := slurp(r)
 	if err != nil {
 		return nil, err
 	}
-	return &reader{src: r, hdr: h}, nil
+	if _, err := parseHeader(bytes.NewReader(src)); err != nil {
+		return nil, err
+	}
+	return &reader{ctx: ctx, src: src}, nil
 }
 
 type header struct {
@@ -55,13 +58,46 @@ func parseHeader(r io.Reader) (header, error) {
 	return h, nil
 }
 
+// slurp copies r into a buffer. A sized ReaderAt still at offset 0 is
+// read with ReadAt so Seek-based streams (bytes.Reader, SectionReader)
+// do not depend on the Read cursor.
+func slurp(r io.Reader) ([]byte, error) {
+	type sizedAt interface {
+		io.ReaderAt
+		io.Seeker
+		Size() int64
+	}
+	if s, ok := r.(sizedAt); ok {
+		off, err := s.Seek(0, io.SeekCurrent)
+		if err == nil && off == 0 {
+			n := s.Size()
+			if n == 0 {
+				return nil, io.EOF
+			}
+			b := make([]byte, n)
+			nr, err := s.ReadAt(b, 0)
+			if nr != int(n) {
+				b = b[:nr]
+				if err == nil || err == io.EOF {
+					err = io.ErrUnexpectedEOF
+				}
+				return b, err
+			}
+			if err == io.EOF {
+				err = nil
+			}
+			return b, err
+		}
+	}
+	return io.ReadAll(r)
+}
+
 type reader struct {
-	src     io.Reader
-	hdr     header
-	buf     []byte
-	off     int
-	err     error
-	decoder *oggreDecoder
+	ctx context.Context
+	src []byte
+	buf []byte
+	off int
+	err error
 }
 
 func (r *reader) Read(p []byte) (int, error) {
@@ -86,20 +122,19 @@ func (r *reader) Close() error {
 	r.err = errClosed
 	r.buf = nil
 	r.src = nil
-	r.decoder = nil
 	return nil
 }
 
 func (r *reader) fill() error {
-	if r.decoder == nil {
-		d, err := newOGGREDecoder(r.src, r.hdr)
-		if err != nil {
-			return err
-		}
-		r.decoder = d
+	if len(r.src) == 0 {
+		return io.EOF
 	}
-	out, err := r.decoder.next()
+	out, err := DecodeGuest(r.ctx, r.src, 0)
+	r.src = nil
 	if err != nil {
+		if errors.Is(err, errGuest) {
+			return io.ErrUnexpectedEOF
+		}
 		return err
 	}
 	r.buf = out
@@ -107,10 +142,21 @@ func (r *reader) fill() error {
 	return nil
 }
 
+// DebugPath is the last OGGRE record kind; tests read it.
+var DebugPath string
+
+// DebugIdentN and DebugSerial are the last stream's first 167c0 fields.
+var DebugIdentN int
+var DebugSerial uint32
+var DebugHeaderLeft int
+var DebugDestPages int
+var DebugFrames [3]int
+
 var (
 	errNil     = errors.New("mpzz: nil reader")
 	errMagic   = errors.New("mpzz: bad magic")
 	errVersion = errors.New("mpzz: bad version")
 	errFlags   = errors.New("mpzz: bad flags")
 	errClosed  = errors.New("mpzz: closed")
+	errGuest   = errors.New("mpzz: guest")
 )

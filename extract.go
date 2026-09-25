@@ -12,8 +12,10 @@ import (
 	"iter"
 	"log/slog"
 	"slices"
+	"sync"
 
 	"github.com/lewtec/lewkit/x/taskgroup"
+	"github.com/lucasew/garotafitness/internal/pages"
 	"github.com/lucasew/garotafitness/setupdata"
 )
 
@@ -37,9 +39,6 @@ func (e Extractor) Extract(ctx context.Context) error {
 }
 
 func (e Extractor) extract(ctx context.Context) error {
-	context.AfterFunc(ctx, func() {
-		slog.Warn("extract context done", "err", ctx.Err(), "cause", context.Cause(ctx))
-	})
 	setup, setupErr := readSetup(e.Source)
 	if err := setupErr; err != nil {
 		return fmt.Errorf("setup.exe: %w", err)
@@ -93,6 +92,7 @@ func extractVolumes(ctx context.Context, e Extractor, vols []Volume) error {
 		return taskgroup.Each[Volume]{
 			Name:     "volumes",
 			PoolKind: taskgroup.Control,
+			Serial:   true,
 			Items:    vols,
 			TaskName: func(_ int, v Volume) string { return v.Name },
 			Fn: func(ctx context.Context, s *taskgroup.Status, v Volume) error {
@@ -150,6 +150,32 @@ func (c countReader) Read(b []byte) (int, error) {
 	return n, err
 }
 
+// spanAt reports the highest ReadAt offset inside [base, base+lim).
+type spanAt struct {
+	ra        io.ReaderAt
+	base, lim int64
+	s         *taskgroup.Status
+	mu        sync.Mutex
+	max       int64
+}
+
+func (t *spanAt) ReadAt(p []byte, off int64) (int, error) {
+	n, err := t.ra.ReadAt(p, off)
+	if n > 0 && t.s != nil && off >= t.base {
+		end := off - t.base + int64(n)
+		if end > t.lim {
+			end = t.lim
+		}
+		t.mu.Lock()
+		if end > t.max {
+			t.max = end
+			t.s.Progress(t.max, t.lim)
+		}
+		t.mu.Unlock()
+	}
+	return n, err
+}
+
 func asReaderAt(f fs.File) (io.ReaderAt, int64, bool) {
 	ra, ok := f.(io.ReaderAt)
 	if !ok {
@@ -163,7 +189,7 @@ func asReaderAt(f fs.File) (io.ReaderAt, int64, bool) {
 }
 
 func extractVolume(ctx context.Context, e Extractor, v Volume, st *taskgroup.Status) error {
-	if err := ctx.Err(); err != nil {
+	if err := contextError(ctx); err != nil {
 		return err
 	}
 	f, err := e.Source.Open(v.Name)
@@ -245,15 +271,10 @@ func extractSolids(ctx context.Context, e Extractor, ra io.ReaderAt, solids iter
 			Items:    list,
 			TaskName: func(_ int, s solid) string { return s.pipe.String() },
 			Fn: func(ctx context.Context, st *taskgroup.Status, s solid) error {
-				var total int64
-				for _, m := range s.files {
-					total += int64(m.Size)
+				if s.csz > 0 {
+					st.Progress(0, int64(s.csz))
 				}
-				prog := &byteProgress{s: st, total: total}
-				if total > 0 {
-					st.Progress(0, total)
-				}
-				return extractSolid(ctx, e, ra, s, prog)
+				return extractSolid(ctx, e, ra, s, &byteProgress{s: st})
 			},
 		}.Run(ctx)
 	})
@@ -307,6 +328,10 @@ func extractSolid(ctx context.Context, e Extractor, ra io.ReaderAt, s solid, pro
 	if s.off < 0 {
 		return fmt.Errorf("solid span")
 	}
+	ra = ctxAt{ctx: ctx, ra: ra}
+	if prog != nil && prog.s != nil && s.csz > 0 {
+		ra = &spanAt{ra: ra, base: s.off, lim: int64(s.csz), s: prog.s}
+	}
 	var (
 		src     io.Reader = io.NewSectionReader(ra, s.off, int64(s.csz))
 		closers []io.Closer
@@ -328,20 +353,47 @@ func extractSolid(ctx context.Context, e Extractor, ra io.ReaderAt, s solid, pro
 	if prog != nil && prog.s != nil {
 		prog.s.Update(s.pipe.String())
 	}
-	for _, m := range s.files {
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		prog.member(m.Path)
-		in := io.Reader(io.LimitReader(src, int64(m.Size)))
-		if prog != nil {
-			in = countReader{r: in, p: prog}
-		}
-		if err := writeMember(ctx, e.Dest, m, in); err != nil {
-			return fmt.Errorf("extract %s pipeline %s (solid offset %d compressed %d): %w",
-				m.Path, s.pipe.String(), s.off, s.csz, err)
-		}
-		slog.Info("extracted", "path", m.Path, "size", m.Size, "pipeline", s.pipe.String())
+	err := withSession(ctx, func(ctx context.Context) error {
+		return taskgroup.Isolate(ctx, func(ctx context.Context) error {
+			sem := make(chan struct{}, 4)
+			for _, m := range s.files {
+				if err := contextError(ctx); err != nil {
+					return err
+				}
+				select {
+				case sem <- struct{}{}:
+				case <-ctx.Done():
+					return contextError(ctx)
+				}
+				prog.member(m.Path)
+				buf, err := pages.Read(src, int64(m.Size))
+				if err != nil {
+					<-sem
+					return fmt.Errorf("extract %s pipeline %s (solid offset %d compressed %d): %w",
+						m.Path, s.pipe.String(), s.off, s.csz, err)
+				}
+				taskgroup.Go(ctx, m.Path, taskgroup.IO, func(ctx context.Context, st *taskgroup.Status) error {
+					defer buf.Release()
+					defer func() { <-sem }()
+					if m.Size > 0 {
+						st.Progress(0, int64(m.Size))
+					}
+					if err := writeMember(ctx, e.Dest, m, buf.Reader()); err != nil {
+						return fmt.Errorf("extract %s pipeline %s (solid offset %d compressed %d): %w",
+							m.Path, s.pipe.String(), s.off, s.csz, err)
+					}
+					if m.Size > 0 {
+						st.Progress(int64(m.Size), int64(m.Size))
+					}
+					slog.Debug("extracted", "path", m.Path, "size", m.Size, "pipeline", s.pipe.String())
+					return nil
+				})
+			}
+			return nil
+		})
+	})
+	if err != nil {
+		return err
 	}
 	var extra [1]byte
 	if _, err := io.ReadFull(src, extra[:]); err != io.EOF {

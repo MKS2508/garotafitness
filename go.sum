@@ -22,8 +22,8 @@ github.com/clipperhouse/displaywidth v0.11.0 h1:lBc6kY44VFw+TDx4I8opi/EtL9m20WSE
 github.com/clipperhouse/displaywidth v0.11.0/go.mod h1:bkrFNkf81G8HyVqmKGxsPufD3JhNl3dSqnGhOoSD/o0=
 github.com/clipperhouse/uax29/v2 v2.7.0 h1:+gs4oBZ2gPfVrKPthwbMzWZDaAFPGYK72F0NJv2v7Vk=
 github.com/clipperhouse/uax29/v2 v2.7.0/go.mod h1:EFJ2TJMRUaplDxHKj1qAEhCtQPW2tJSwu5BF98AuoVM=
-github.com/lewtec/lewkit v0.0.0-20260916223340-f493a7a08064 h1:NKFlUw7PC/C1z1yOTHxiwQTGgFXkXHLbdpdRggwvMsY=
-github.com/lewtec/lewkit v0.0.0-20260916223340-f493a7a08064/go.mod h1:g5EARi5XQDRWW4Zg9TuU9AKlqVT23QXIYYCXZUCETRY=
+github.com/lewtec/lewkit v0.0.0-20260921203713-979a8d59764b h1:uGjuUPt97o/Rer9U2YiMSro0M/gMEUsLFxJppyIF9Lo=
+github.com/lewtec/lewkit v0.0.0-20260921203713-979a8d59764b/go.mod h1:IVwjV5goVUbpjxDorBpgGifjnMfxpsP3fTxd9hoRIgE=
 github.com/lucasb-eyer/go-colorful v1.4.0 h1:UtrWVfLdarDgc44HcS7pYloGHJUjHV/4FwW4TvVgFr4=
 github.com/lucasb-eyer/go-colorful v1.4.0/go.mod h1:R4dSotOR9KMtayYi1e77YzuveK+i7ruzyGqttikkLy0=
 github.com/mattn/go-runewidth v0.0.30 h1:+KUuiDA4fF0R1p5FeueHefjDm+GIM+kWfFnDjybOPgk=

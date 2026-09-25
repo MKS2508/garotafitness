@@ -1,6 +1,7 @@
 /bin/
 /dist/
 /tmp/
+stream/xt2png/build/
 *.wasm
 !stream/srep/srepdec.wasm
 !stream/magic2/magic2dec.wasm
@@ -8,9 +9,13 @@
 !stream/rzw/rzwdec.wasm
 !stream/mpz/mpzdec.wasm
 !stream/pref/prefdec.wasm
+!stream/xt2png/xt2pngdec.wasm
+!stream/tor/tordec.wasm
 !stream/xt3u/xt3udec.wasm
 /stream/pref/build/
 !reconstruct/fsb/fsb.wasm
 !reconstruct/x5/hpatch.wasm
+!reconstruct/x5n/hpatchsf.wasm
+!reconstruct/sevenz/sevenzenc.wasm
 !reconstruct/fgpack/fgpack.wasm
 !reconstruct/xdelta/xdelta.wasm

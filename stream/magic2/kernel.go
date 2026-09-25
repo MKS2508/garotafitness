@@ -24,6 +24,19 @@ type decoder struct {
 func newDecoder(h Header) *decoder {
 	return &decoder{header: h, colorSelector: 0x2000, alphaSelector: 0x6000, models: make(map[int][]uint16), probabilities: make(map[int]uint16), weights: make(map[int]uint16)}
 }
+
+func (d *decoder) slide() {
+	keep := int(d.header.DictionarySize)
+	if keep < 64<<20 {
+		keep = 64 << 20
+	}
+	if len(d.out) <= keep*2 {
+		return
+	}
+	drop := len(d.out) - keep
+	copy(d.out, d.out[drop:])
+	d.out = d.out[:keep]
+}
 func (d *decoder) model(a, n int) []uint16 {
 	c := d.models[a]
 	if c == nil {
@@ -278,11 +291,20 @@ func (d *decoder) decode(data []byte, s segment) error {
 		if r.err != nil {
 			return r.err
 		}
-		if distance < 0 || distance >= pos || n > end-pos {
+		if n <= 0 {
 			return fmt.Errorf("%w: match distance %d length %d at %d", errBitstream, distance, n, pos)
 		}
+		if n > end-pos {
+			n = end - pos
+		}
+		// PE VirtualAlloc zeros the dictionary: dist>=pos copies 0, not an error.
 		for i := 0; i < n; i++ {
-			d.out = append(d.out, d.out[len(d.out)-distance-1])
+			p := len(d.out)
+			var b byte
+			if distance >= 0 && distance < p {
+				b = d.out[p-distance-1]
+			}
+			d.out = append(d.out, b)
 		}
 	}
 	return r.finish()

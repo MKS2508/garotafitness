@@ -64,6 +64,9 @@ func (m *uintModel) decode(r *rans) uint64 {
 }
 
 func decodeFrames(frames [][]byte, limit int) ([]byte, error) {
+	if len(frames) == 0 {
+		return []byte{}, nil
+	}
 	d := newDec(nil, limit)
 	d.r.frames = frames
 	for !d.r.finished() {

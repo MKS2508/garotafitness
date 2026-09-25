@@ -1,6 +1,8 @@
 package garotafitness
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"testing"
 	"testing/fstest"
@@ -65,4 +67,31 @@ func TestRecipeCaseOnlyRename(t *testing.T) {
 	p.app.files["Assets/FILE.dat"] = []byte("payload")
 	require.NoError(t, p.recipe(t.Context(), `ren Assets\FILE.dat file.dat`, "app", 0))
 	require.Equal(t, map[string][]byte{"Assets/file.dat": []byte("payload")}, p.app.files)
+}
+
+func TestWaitDecodedPrefersDecodeErrOverCanceled(t *testing.T) {
+	t.Parallel()
+	want := errors.New("extract volume fg-08.bin: create tmp: not writable")
+	p := &reconstructionPlan{
+		decoded:   map[string]*reconstruction{},
+		seen:      map[string]bool{},
+		decodeErr: want,
+	}
+	ctx, cancel := context.WithCancelCause(t.Context())
+	cancel(context.Canceled)
+	_, err := p.waitDecoded(ctx, "fg-05.bin")
+	require.ErrorIs(t, err, want)
+}
+
+func TestWaitDecodedReturnsCancelCause(t *testing.T) {
+	t.Parallel()
+	want := errors.New("checksum: fg-03.bin mismatch")
+	p := &reconstructionPlan{
+		decoded: map[string]*reconstruction{},
+		seen:    map[string]bool{},
+	}
+	ctx, cancel := context.WithCancelCause(t.Context())
+	cancel(want)
+	_, err := p.waitDecoded(ctx, "fg-05.bin")
+	require.ErrorIs(t, err, want)
 }

@@ -1,8 +1,8 @@
 # LLVM optimizes the translation before linking. Linking at -O0 avoids the
 # incompatible wasm-opt flags in the pinned conda emscripten/binaryen pair.
 EMCC ?= emcc
-.PHONY: guest
-guest: mpzdec.wasm
+GUEST = mpzdec.wasm
+include ../../make/committed-wasm.mk
 mpzdec.wasm: guest/decoder.c guest/mpz-native.h guest/mpz-entry.inc guest/mpz-tables.inc
 	$(EMCC) guest/decoder.c -O2 -std=c11 -Wno-parentheses-equality -c -o decoder.o
 	$(EMCC) decoder.o -O0 --no-entry -sSTANDALONE_WASM=1 \
