@@ -41,7 +41,7 @@ Inherited C (cite the file): `mise.toml`. Go comes from the mise registry. Compi
 | TEC-04 | `setup.exe` bytes plus Volume headers | Read them as data. Collect Encoder names and statically recover reconstruction records. Never map those bytes as executable or run installer scripts | Encoder names and reconstruction metadata |
 | TEC-05 | One Encoder name | If an official implementation of that Encoder exists, wrap it as a Go stream primitive. If none exists, reverse-engineer that Encoder. One Encoder per package | `NewReader(io.Reader) (io.ReadCloser, error)` in the shape of `compress/gzip` |
 | TEC-06 | A Volume (`ArC\x01`) | Parse the container in the shape of `archive/tar`. Send each solid block through the Encoder pipeline TEC-05 named | Members written through Dest |
-| TEC-07 | Official C or C++ for an Encoder | Compile to `wasm32-wasip1`. Run the Guest in-process through wazero. WASI preview1 mounts Source read-only and Dest read-write. One Guest per Encoder when the official code is not Go | Decompressed bytes inside the same process |
+| TEC-07 | Official C or C++ for an Encoder | Compile to `wasm32-wasip1`. Run the Guest in-process through wazero. WASI preview1 mounts Source read-only and Dest read-write. One Guest per Encoder when the official code is not Go. Go schedules every thread. The Guest links no pthreads and starts no thread | Decompressed bytes inside the same process |
 | TEC-08 | Member path plus Dest root | Reject the member when the cleaned path leaves Dest | A contained write. An escape produces no write |
 
 ## Tooling
@@ -123,6 +123,7 @@ Inherited C (cite the file): `mise.toml`. Go comes from the mise registry. Compi
 | INV-06 | One Algo maps to one package | Algo | a second implementation of the same Algo |
 | INV-07 | `setup.exe` is data | TEC-04 | call a function inside that image |
 | INV-08 | A missing optional Volume is not a failure | Volume | require `fg-optional-*` |
+| INV-09 | Go schedules every thread. A Guest starts none | Guest | pthread, wasi-threads |
 
 ## Errors
 
@@ -225,7 +226,7 @@ Residual risk: a bug in a Guest can corrupt Dest or exhaust memory inside the 4 
 ## Decision history
 
 - ADR-0001: argv is `extract SOURCE DEST`. Rejected tar-shaped flags.
-- ADR-0002: C++ runs as in-process WASM through wazero. Rejected subprocess and cgo.
+- ADR-0002: C++ runs as in-process WASM through wazero. Go schedules every thread. The Guest links no pthreads and starts no thread. Rejected subprocess and cgo.
 - ADR-0003: `setup.exe` is signal data. Rejected execution of installer DLLs.
 - ADR-0004: Compilers come from mise `conda:`. Rejected nix, host g++, registry clang.
 - ADR-0005: One Algo package at module root. Superseded by ADR-0007.
