@@ -1,10 +1,10 @@
 package x3
 
 import (
-	"bytes"
 	"context"
-	"errors"
 	"testing"
+
+	"github.com/stretchr/testify/require"
 )
 
 func TestApplyInstructions(t *testing.T) {
@@ -22,13 +22,11 @@ func TestApplyInstructions(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			got, err := applyCode(t.Context(), []byte(tt.old), tt.code, len(tt.want))
-			if err != nil || string(got) != tt.want {
-				t.Fatalf("got %q, %v; want %q", got, err, tt.want)
-			}
+			require.NoError(t, err)
+			require.Equal(t, tt.want, string(got))
 			for n := 0; n < len(tt.code); n++ {
-				if _, err := applyCode(t.Context(), []byte(tt.old), tt.code[:n], len(tt.want)); err == nil {
-					t.Fatalf("accepted truncation at %d", n)
-				}
+				_, err := applyCode(t.Context(), []byte(tt.old), tt.code[:n], len(tt.want))
+				require.Error(t, err)
 			}
 		})
 	}
@@ -40,15 +38,13 @@ func TestApplyRejectsInvalidInstructions(t *testing.T) {
 		{0x15, 0, 0x14, 3, 2}, {0x15, 0, 0x14, 0, 5}, {0x15, 0, 0xc, 5},
 		{0x15, 0, 0xe, 0}, {0x15, 0, 0x11, 4, 1}, {0x15, 0, 0xc, 4, 0x16, 0},
 	} {
-		if _, err := applyCode(t.Context(), []byte("abcd"), code, 4); err == nil {
-			t.Fatalf("accepted %x", code)
-		}
+		_, err := applyCode(t.Context(), []byte("abcd"), code, 4)
+		require.Error(t, err)
 	}
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
-	if _, err := applyCode(ctx, nil, []byte{0x15, 0, 0x16}, 0); !errors.Is(err, context.Canceled) {
-		t.Fatal(err)
-	}
+	_, err := applyCode(ctx, nil, []byte{0x15, 0, 0x16}, 0)
+	require.ErrorIs(t, err, context.Canceled)
 }
 
 func TestRecordChecksBothVersions(t *testing.T) {
@@ -57,25 +53,21 @@ func TestRecordChecksBothVersions(t *testing.T) {
 	c, d := checksum(want)
 	r := Record{Source: "a", Target: "b", old: fileVersion{size: 4, w1: a, w2: b}, new: fileVersion{size: 4, w1: c, w2: d}, code: []byte{0x15, 0, 0x14, 0, 4, 0x9, 1, 4, 0, 1, 1, 1, 0x16}}
 	got, err := r.Apply(t.Context(), old)
-	if err != nil || !bytes.Equal(got, want) {
-		t.Fatalf("%q %v", got, err)
-	}
-	if _, err := r.Apply(t.Context(), []byte("abce")); err == nil {
-		t.Fatal("accepted wrong source")
-	}
+	require.NoError(t, err)
+	require.Equal(t, want, got)
+	_, err = r.Apply(t.Context(), []byte("abce"))
+	require.Error(t, err)
 	r.new.w2 ^= 1
-	if _, err := r.Apply(t.Context(), old); err == nil {
-		t.Fatal("accepted wrong target checksum")
-	}
+	_, err = r.Apply(t.Context(), old)
+	require.Error(t, err)
 }
 
 func TestFilePath(t *testing.T) {
 	for _, name := range []string{"../a", "a/../b", "/a", "C:\\a", "a\x00b"} {
-		if _, err := filePath(name); err == nil {
-			t.Fatalf("accepted %q", name)
-		}
+		_, err := filePath(name)
+		require.Error(t, err)
 	}
-	if got, err := filePath("Data\\file"); got != "Data/file" || err != nil {
-		t.Fatalf("%q %v", got, err)
-	}
+	got, err := filePath("Data\\file")
+	require.NoError(t, err)
+	require.Equal(t, "Data/file", got)
 }

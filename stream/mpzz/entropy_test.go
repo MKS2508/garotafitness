@@ -5,6 +5,8 @@ import (
 	"errors"
 	"io"
 	"testing"
+
+	"github.com/stretchr/testify/require"
 )
 
 func TestReadSize(t *testing.T) {
@@ -16,13 +18,11 @@ func TestReadSize(t *testing.T) {
 		{[]byte{0xf9, 0x12}, 1214}, {[]byte{0xff, 0xff, 0xff, 0xff}, 1<<30 - 1},
 	} {
 		got, err := readSize(bytes.NewReader(tt.in))
-		if err != nil || got != tt.want {
-			t.Fatalf("%x: %d, %v; want %d", tt.in, got, err, tt.want)
-		}
+		require.NoError(t, err)
+		require.Equal(t, tt.want, got)
 	}
 	for _, in := range [][]byte{{1}, {2, 0}, {3, 0, 0}} {
-		if _, err := readSize(bytes.NewReader(in)); !errors.Is(err, io.EOF) && !errors.Is(err, io.ErrUnexpectedEOF) {
-			t.Fatalf("%x: expected truncation, got %v", in, err)
-		}
+		_, err := readSize(bytes.NewReader(in))
+		require.True(t, errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF))
 	}
 }

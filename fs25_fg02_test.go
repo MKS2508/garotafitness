@@ -103,9 +103,7 @@ func TestFS25Fg02FirstMpzzBlock(t *testing.T) {
 	_, err = io.ReadFull(r, in)
 	require.NoError(t, err)
 	t.Logf("block0 head %q flags=%02x", in[:7], in[6])
-	if err := os.WriteFile("/tmp/fs25-fg02-block0.oggre", in, 0644); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, os.WriteFile("/tmp/fs25-fg02-block0.oggre", in, 0644))
 	t.Logf("wrote /tmp/fs25-fg02-block0.oggre %d", len(in))
 	gotGuest, err := mpzz.DecodeGuest(t.Context(), in, 256<<20)
 	if err != nil {
@@ -227,9 +225,7 @@ func TestFS25Fg02FirstStreamPages(t *testing.T) {
 	t.Logf("record0 n=%d crc=%08x path=%s head=%q", n, crc32.ChecksumIEEE(got), mpzz.DebugPath, got[:min(8, n)])
 	pos := 0
 	for i := 0; pos+27 <= len(got); i++ {
-		if string(got[pos:pos+4]) != "OggS" {
-			t.Fatalf("page %d at %d not OggS", i, pos)
-		}
+		require.Equal(t, "OggS", string(got[pos:pos+4]), "page %d at %d", i, pos)
 		flags := got[pos+5]
 		serial := uint32(got[pos+14]) | uint32(got[pos+15])<<8 | uint32(got[pos+16])<<16 | uint32(got[pos+17])<<24
 		nseg := int(got[pos+26])

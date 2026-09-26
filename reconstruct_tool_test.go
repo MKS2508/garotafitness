@@ -1,37 +1,31 @@
 package garotafitness
 
 import (
-	"bytes"
 	"context"
 	"crypto/md5"
-	"errors"
 	"testing"
+
+	"github.com/stretchr/testify/require"
 )
 
 func TestToolsetMatchByNameAndHash(t *testing.T) {
 	t.Parallel()
 	c, err := reconstructToolset.match("fgpack.exe", "")
-	if err != nil || c.id != "lzma" {
-		t.Fatalf("name fallback %s %v", c.id, err)
-	}
+	require.NoError(t, err)
+	require.Equal(t, "lzma", c.id)
 	c, err = reconstructToolset.match("fgpack.exe", "a95222984f60e3f5bea4099cab85868946523391b0e50d7f6dcc5e866d0b0dbd")
-	if err != nil || c.id != "lzma" {
-		t.Fatalf("rimworld %s %v", c.id, err)
-	}
+	require.NoError(t, err)
+	require.Equal(t, "lzma", c.id)
 	c, err = reconstructToolset.match("fgpack.exe", "eb9a914ff781bc2f088e70d1b99faca73d98a96325a4a154cf52b3b52a4f860a")
-	if err != nil || c.id != "i3d" {
-		t.Fatalf("fs25 %s %v", c.id, err)
-	}
-	if _, err := reconstructToolset.match("fgpack.exe", "deadbeef"); !errors.Is(err, errUnknownToolHash) {
-		t.Fatalf("unknown hash %v", err)
-	}
+	require.NoError(t, err)
+	require.Equal(t, "i3d", c.id)
+	_, err = reconstructToolset.match("fgpack.exe", "deadbeef")
+	require.ErrorIs(t, err, errUnknownToolHash)
 	c, err = reconstructToolset.match("x4.exe", "7889aadec74fe2e4940a3dab081b8d560d7d751b0ed13cfc90b8986ca6ae084f")
-	if err != nil || c.id != "defarm" {
-		t.Fatalf("fs25 x4 %s %v", c.id, err)
-	}
-	if _, err := reconstructToolset.match("x4.exe", "deadbeef"); !errors.Is(err, errUnknownToolHash) {
-		t.Fatalf("unknown x4 hash %v", err)
-	}
+	require.NoError(t, err)
+	require.Equal(t, "defarm", c.id)
+	_, err = reconstructToolset.match("x4.exe", "deadbeef")
+	require.ErrorIs(t, err, errUnknownToolHash)
 }
 
 func TestToolsetMatchByHash(t *testing.T) {
@@ -40,27 +34,21 @@ func TestToolsetMatchByHash(t *testing.T) {
 	s.add(codec{id: "lzma", sha256: "aaa", names: []string{"codec-test.exe"}})
 	s.add(codec{id: "other", sha256: "bbb", names: []string{"codec-test.exe"}})
 	c, err := s.match("codec-test.exe", "BBB")
-	if err != nil || c.id != "other" {
-		t.Fatalf("%s %v", c.id, err)
-	}
-	if _, err := s.match("codec-test.exe", ""); err == nil {
-		t.Fatal("expected missing hash")
-	}
-	if _, err := s.match("codec-test.exe", "ccc"); !errors.Is(err, errUnknownToolHash) {
-		t.Fatalf("err %v", err)
-	}
+	require.NoError(t, err)
+	require.Equal(t, "other", c.id)
+	_, err = s.match("codec-test.exe", "")
+	require.Error(t, err, "expected missing hash")
+	_, err = s.match("codec-test.exe", "ccc")
+	require.ErrorIs(t, err, errUnknownToolHash)
 }
 
 func TestToolsetSameHashDifferentName(t *testing.T) {
 	t.Parallel()
 	const xdelta = "09763ca90c09a5f815a94527399b1f2a88685e9de462e2ff1bc5648d320e707a"
 	c, err := reconstructToolset.match("xdelta3.exe", xdelta)
-	if err != nil || c.id != "xdelta" {
-		t.Fatalf("%s %v", c.id, err)
-	}
-	if g := reconstructToolset.canonical("packer.exe", xdelta); g != "x.exe" {
-		t.Fatalf("%q", g)
-	}
+	require.NoError(t, err)
+	require.Equal(t, "xdelta", c.id)
+	require.Equal(t, "x.exe", reconstructToolset.canonical("packer.exe", xdelta))
 }
 
 func TestToolsetRunByChecksum(t *testing.T) {
@@ -74,12 +62,10 @@ func TestToolsetRunByChecksum(t *testing.T) {
 	}})
 	want := md5sum([]byte("ok"))
 	out, err := s.run(t.Context(), "codec-test.exe", "ccc", nil, nil, want)
-	if err != nil || string(out) != "ok" {
-		t.Fatalf("%q %v", out, err)
-	}
-	if _, err := s.run(t.Context(), "codec-test.exe", "ccc", nil, nil, nil); !errors.Is(err, errUnknownToolHash) {
-		t.Fatalf("err %v", err)
-	}
+	require.NoError(t, err)
+	require.Equal(t, "ok", string(out))
+	_, err = s.run(t.Context(), "codec-test.exe", "ccc", nil, nil, nil)
+	require.ErrorIs(t, err, errUnknownToolHash)
 }
 
 func TestToolsetRunI3D(t *testing.T) {
@@ -87,19 +73,11 @@ func TestToolsetRunI3D(t *testing.T) {
 	in := []byte{0x2a, 0, 0, 0, 0, 4, 0, 0, 0, 1, 2, 3, 4}
 	const fs25 = "eb9a914ff781bc2f088e70d1b99faca73d98a96325a4a154cf52b3b52a4f860a"
 	out, err := reconstructToolset.run(t.Context(), "fgpack.exe", fs25, in, []string{"a.shapes", "a.fgr_"}, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if bytes.Equal(out, in) {
-		t.Fatal("i3d did not change payload")
-	}
+	require.NoError(t, err)
+	require.NotEqual(t, in, out, "i3d did not change payload")
 	back, err := reconstructToolset.run(t.Context(), "fgpack.exe", fs25, out, []string{"a.fgr_", "a.shapes"}, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if string(back) != string(in) {
-		t.Fatalf("%x vs %x", back, in)
-	}
+	require.NoError(t, err)
+	require.Equal(t, in, back)
 }
 
 func md5sum(b []byte) []byte {

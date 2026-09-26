@@ -44,9 +44,7 @@ func TestExtractInstalledRimWorld(t *testing.T) {
 	if mode == "" {
 		t.Skip("set GAROTAFITNESS_FULL_EXTRACT=all or required for full corpus extraction")
 	}
-	if mode != "all" && mode != "required" {
-		t.Fatal("GAROTAFITNESS_FULL_EXTRACT must be all or required")
-	}
+	require.True(t, mode == "all" || mode == "required", "GAROTAFITNESS_FULL_EXTRACT must be all or required")
 	var source fs.FS = corpus.Open(t)
 	if ok, err := lewpath.New("setup.exe").Exists(source); err != nil || !ok {
 		t.Skip("corpus not mounted")

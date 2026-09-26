@@ -3,7 +3,6 @@ package garotafitness
 import (
 	"bytes"
 	"encoding/binary"
-	"errors"
 	"fmt"
 	"io"
 	"strings"
@@ -92,9 +91,7 @@ func TestX4UnknownHash(t *testing.T) {
 	p.temp.files["x4.exe"] = []byte("not-giants")
 	p.app.files["dlc/1.xml"] = []byte("hi")
 	err := p.recipe(t.Context(), `"{tmp}\x4.exe" dlc out.dlc 02 01`, "app", 0)
-	if !errors.Is(err, errUnknownToolHash) {
-		t.Fatalf("err %v", err)
-	}
+	require.ErrorIs(t, err, errUnknownToolHash)
 }
 
 func TestRecipeRejectsUnknownProgramsAndEscapes(t *testing.T) {

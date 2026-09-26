@@ -4,54 +4,37 @@ import (
 	"bytes"
 	"os"
 	"testing"
+
+	"github.com/stretchr/testify/require"
 )
 
 func TestParseFS25Header(t *testing.T) {
 	t.Parallel()
 	raw, err := os.ReadFile("testdata/fg01.head.bin")
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	h, err := parseHeader(bytes.NewReader(raw))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if h.Depth != 2 || h.Method != "png+preflate" {
-		t.Fatalf("depth=%d method=%q", h.Depth, h.Method)
-	}
-	if len(h.Resources) != 8 {
-		t.Fatalf("resources %d", len(h.Resources))
-	}
-	if h.Compressed != 0 || len(h.Dups) != 0 {
-		t.Fatalf("flag=%d dups=%d", h.Compressed, len(h.Dups))
-	}
+	require.NoError(t, err)
+	require.Equal(t, int32(2), h.Depth)
+	require.Equal(t, "png+preflate", h.Method)
+	require.Len(t, h.Resources, 8)
+	require.Zero(t, h.Compressed)
+	require.Empty(t, h.Dups)
 	rest := raw[headerLen(h):]
 	sc, rest := i32le(rest), rest[4:]
 	bs, rest := i64le(rest), rest[8:]
-	if sc != 3 || bs != 91 {
-		t.Fatalf("chunk sc=%d bs=%d", sc, bs)
-	}
+	require.Equal(t, int32(3), sc)
+	require.Equal(t, int64(91), bs)
 	var sum int32
 	for i := 0; i < 3; i++ {
 		sh, err := readStreamHeader(bytes.NewReader(rest[i*18:]))
-		if err != nil {
-			t.Fatal(err)
-		}
-		if sh.Kind != kindExtended {
-			t.Fatalf("stream %d kind %d", i, sh.Kind)
-		}
-		if getBits(sh.Option, 0, 3) != subPreflate {
-			t.Fatalf("stream %d sub %d", i, getBits(sh.Option, 0, 3))
-		}
+		require.NoError(t, err)
+		require.Equal(t, byte(kindExtended), sh.Kind)
+		require.Equal(t, subPreflate, getBits(sh.Option, 0, 3))
 		sum += sh.NewSize
 	}
-	if int64(sum) != bs {
-		t.Fatalf("sumNew %d bs %d", sum, bs)
-	}
+	require.Equal(t, bs, int64(sum))
 	tail := i32le(rest[3*18+int(bs):])
-	if tail != 10509958 {
-		t.Fatalf("first tail %d", tail)
-	}
+	require.Equal(t, int32(10509958), tail)
 }
 
 func headerLen(h Header) int {

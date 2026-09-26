@@ -3,6 +3,8 @@ package mpzz
 import (
 	"bytes"
 	"testing"
+
+	"github.com/stretchr/testify/require"
 )
 
 func TestBookCacheUnusedEntries(t *testing.T) {
@@ -19,13 +21,9 @@ func TestBookCacheUnusedEntries(t *testing.T) {
 			c := bookCache{capacity: 2}
 			b := codebook{lengths: make([]byte, 8), quant: []int{0, 1}}
 			copy(b.lengths, bytes.Repeat([]byte{3}, tt.used))
-			if got := c.selectBook(&b, nil); got != 0 {
-				t.Fatalf("first context %d", got)
-			}
+			require.Equal(t, 0, c.selectBook(&b, nil))
 			b.lengths = bytes.Repeat([]byte{3}, 8)
-			if got := c.selectBook(&b, nil); got != tt.want {
-				t.Fatalf("context %d, want %d", got, tt.want)
-			}
+			require.Equal(t, tt.want, c.selectBook(&b, nil))
 		})
 	}
 }

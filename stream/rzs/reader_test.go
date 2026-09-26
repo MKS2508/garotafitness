@@ -3,12 +3,12 @@ package rzs
 import (
 	"bytes"
 	"encoding/binary"
-	"errors"
 	"hash/crc32"
 	"io"
 	"testing"
 
 	"github.com/lucasew/garotafitness/internal/corpus"
+	"github.com/stretchr/testify/require"
 )
 
 func TestNewReader(t *testing.T) {
@@ -29,12 +29,8 @@ func TestNewReader(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			rc, err := NewReader(tt.in)
-			if rc != nil {
-				t.Fatalf("NewReader(%s) reader = %T; want nil", tt.name, rc)
-			}
-			if !errors.Is(err, tt.want) {
-				t.Fatalf("NewReader(%s) err = %v; want %v", tt.name, err, tt.want)
-			}
+			require.Nil(t, rc)
+			require.ErrorIs(t, err, tt.want)
 		})
 	}
 }
@@ -45,21 +41,15 @@ func TestHeaderSizes(t *testing.T) {
 	binary.LittleEndian.PutUint64(hdr[0:8], 100)
 	binary.LittleEndian.PutUint64(hdr[8:16], 4<<30+1)
 	_, err := NewReader(bytes.NewReader(hdr[:]))
-	if !errors.Is(err, errTooLarge) {
-		t.Fatalf("got %v; want %v", err, errTooLarge)
-	}
+	require.ErrorIs(t, err, errTooLarge)
 }
 
 func TestNewReaderVersion(t *testing.T) {
 	t.Parallel()
 	in := append(sizeHdr(8, 8), []byte("CM(\x00\x06\x00\x00")...)
 	rc, err := NewReader(bytes.NewReader(in))
-	if rc != nil {
-		t.Fatalf("reader = %T; want nil", rc)
-	}
-	if !errors.Is(err, errVersion) {
-		t.Fatalf("err = %v; want %v", err, errVersion)
-	}
+	require.Nil(t, rc)
+	require.ErrorIs(t, err, errVersion)
 }
 
 func TestCorpusHeaders(t *testing.T) {
@@ -76,25 +66,19 @@ func TestCorpusHeaders(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			f := corpus.FileEnv(t, "GAROTAFITNESS_CORPUS_SOC", tt.name)
-			if _, err := f.Seek(31, io.SeekStart); err != nil {
-				t.Fatal(err)
-			}
+			_, err := f.Seek(31, io.SeekStart)
+			require.NoError(t, err)
 			var hdr [headerSize]byte
-			if _, err := io.ReadFull(f, hdr[:]); err != nil {
-				t.Fatal(err)
-			}
+			_, err = io.ReadFull(f, hdr[:])
+			require.NoError(t, err)
 			plain := binary.LittleEndian.Uint64(hdr[0:8])
 			packed := binary.LittleEndian.Uint64(hdr[8:16])
-			if plain != tt.plain || packed != tt.packed {
-				t.Fatalf("plain=%#x packed=%#x; want %#x %#x", plain, packed, tt.plain, tt.packed)
-			}
+			require.Equal(t, tt.plain, plain)
+			require.Equal(t, tt.packed, packed)
 			off, n, err := parseCM(f)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if off != tt.index || n != 20 {
-				t.Fatalf("index=%#x consumed=%d; want %#x 20", off, n, tt.index)
-			}
+			require.NoError(t, err)
+			require.Equal(t, tt.index, off)
+			require.Equal(t, uint64(20), n)
 		})
 	}
 }
@@ -104,12 +88,9 @@ func TestParseRawHeader(t *testing.T) {
 	payload := []byte{0x45, 0xe2, 0x09, 0x00, 0x00, 0x00}
 	in := append([]byte("CM(\x05\x06\x00\x00"), framed(payload)[3:]...)
 	off, n, err := parseCM(bytes.NewReader(in))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if off != 0x9e245 || n != 17 {
-		t.Fatalf("index=%#x consumed=%d", off, n)
-	}
+	require.NoError(t, err)
+	require.Equal(t, uint64(0x9e245), off)
+	require.Equal(t, uint64(17), n)
 }
 
 func TestParseStdioHeader(t *testing.T) {
@@ -117,24 +98,18 @@ func TestParseStdioHeader(t *testing.T) {
 	payload := []byte{0x7f, 0x4b, 0xde, 0x1d, 0x00, 0x00}
 	in := append([]byte("CM(\x05\x06\x00\x00\x06\x00\x00"), framed(payload)[3:]...)
 	off, n, err := parseCM(bytes.NewReader(in))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if off != 0x1dde4b7f || n != 20 {
-		t.Fatalf("index=%#x consumed=%d", off, n)
-	}
+	require.NoError(t, err)
+	require.Equal(t, uint64(0x1dde4b7f), off)
+	require.Equal(t, uint64(20), n)
 }
 
 func TestNewReaderCorpusHeader(t *testing.T) {
 	t.Parallel()
 	f := corpus.FileEnv(t, "GAROTAFITNESS_CORPUS_SOC", "fg-02.bin")
-	if _, err := f.Seek(31, io.SeekStart); err != nil {
-		t.Fatal(err)
-	}
+	_, err := f.Seek(31, io.SeekStart)
+	require.NoError(t, err)
 	rc, err := NewReader(f)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	t.Cleanup(func() { rc.Close() })
 }
 

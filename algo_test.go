@@ -1,6 +1,10 @@
 package garotafitness
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/stretchr/testify/require"
+)
 
 func TestParseAlgo(t *testing.T) {
 	t.Parallel()
@@ -29,10 +33,7 @@ func TestParseAlgo(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.in, func(t *testing.T) {
 			t.Parallel()
-			got := ParseAlgo(tc.in)
-			if got != tc.want {
-				t.Fatalf("got %v want %v", got, tc.want)
-			}
+			require.Equal(t, tc.want, ParseAlgo(tc.in))
 		})
 	}
 }
@@ -40,7 +41,6 @@ func TestParseAlgo(t *testing.T) {
 func TestAlgoZeroInvalid(t *testing.T) {
 	t.Parallel()
 	var a Algo
-	if a.Known() || a != AlgoInvalid {
-		t.Fatalf("zero value %v", a)
-	}
+	require.False(t, a.Known())
+	require.Equal(t, AlgoInvalid, a)
 }

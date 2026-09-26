@@ -212,12 +212,8 @@ func TestFS25Fg01DecodeUntilFlagDe(t *testing.T) {
 			dst = &buf
 		}
 		n, err := io.Copy(dst, io.LimitReader(r, int64(m.Size)))
-		if err != nil {
-			t.Fatalf("member[%d] %s size=%d copied=%d: %v", i, m.Path, m.Size, n, err)
-		}
-		if n != int64(m.Size) {
-			t.Fatalf("member[%d] %s short %d want %d", i, m.Path, n, m.Size)
-		}
+		require.NoError(t, err, "member[%d] %s size=%d copied=%d", i, m.Path, m.Size, n)
+		require.Equal(t, int64(m.Size), n, "member[%d] %s", i, m.Path)
 		if i >= 42765 {
 			name := filepath.Base(m.Path)
 			require.NoError(t, os.WriteFile(filepath.Join(outDir, fmt.Sprintf("%05d-%s", i, name)), buf.Bytes(), 0o644))
@@ -227,5 +223,5 @@ func TestFS25Fg01DecodeUntilFlagDe(t *testing.T) {
 			return
 		}
 	}
-	t.Fatal("flag-de.png not reached")
+	require.FailNow(t, "flag-de.png not reached")
 }

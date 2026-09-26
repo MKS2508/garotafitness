@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/lucasew/garotafitness/internal/corpus"
+	"github.com/stretchr/testify/require"
 )
 
 func TestStdioIndexSize(t *testing.T) {
@@ -18,28 +19,19 @@ func TestStdioIndexSize(t *testing.T) {
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			f := corpus.FileEnv(t, "GAROTAFITNESS_CORPUS_SOC", tt.name)
-			if _, err := f.Seek(31+16, io.SeekStart); err != nil {
-				t.Fatal(err)
-			}
+			_, err := f.Seek(31+16, io.SeekStart)
+			require.NoError(t, err)
 			off, n, err := parseCM(f)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if off != tt.index || n != 20 {
-				t.Fatalf("index=%#x consumed=%d", off, n)
-			}
+			require.NoError(t, err)
+			require.Equal(t, tt.index, off)
+			require.Equal(t, uint64(20), n)
 			idxN := tt.packed - tt.index
-			if idxN != 22 {
-				t.Fatalf("index size %d; want 22", idxN)
-			}
+			require.Equal(t, uint64(22), idxN)
 			idx := make([]byte, idxN)
-			if _, err := io.ReadFull(f, idx); err != nil {
-				t.Fatal(err)
-			}
+			_, err = io.ReadFull(f, idx)
+			require.NoError(t, err)
 			fn := int(idx[0]) | int(idx[1])<<8 | int(idx[2])<<16
-			if 7+fn != int(idxN) {
-				t.Fatalf("index frame %d+%d; want %d", 7, fn, idxN)
-			}
+			require.Equal(t, int(idxN), 7+fn)
 		})
 	}
 }

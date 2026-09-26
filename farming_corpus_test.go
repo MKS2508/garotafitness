@@ -57,9 +57,7 @@ func TestFarmingSimulator25Pipelines(t *testing.T) {
 					continue
 				}
 				found = true
-				if m.Pipeline.Last().Algo != last {
-					t.Fatalf("%s last %s want %s (%s)", m.Path, m.Pipeline.Last().Algo, last, m.Pipeline)
-				}
+				require.Equal(t, last, m.Pipeline.Last().Algo, "%s (%s)", m.Path, m.Pipeline)
 			}
 			require.True(t, found)
 		})

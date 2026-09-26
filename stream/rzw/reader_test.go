@@ -2,7 +2,6 @@ package rzw
 
 import (
 	"bytes"
-	"errors"
 	"hash/crc32"
 	"io"
 	"testing"
@@ -11,6 +10,7 @@ import (
 	"github.com/lucasew/garotafitness/stream/delta"
 	"github.com/lucasew/garotafitness/stream/dispack"
 	"github.com/lucasew/garotafitness/stream/srep"
+	"github.com/stretchr/testify/require"
 )
 
 // fg-03.bin solid at 0x1F (rzwb). fg-04 4x4 inner packet is size+CM(.
@@ -58,12 +58,8 @@ func TestNewReader(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			rc, err := NewReader(tt.in)
-			if rc != nil {
-				t.Fatalf("NewReader(%s) reader = %T; want nil", tt.name, rc)
-			}
-			if !errors.Is(err, tt.want) {
-				t.Fatalf("NewReader(%s) err = %v; want %v", tt.name, err, tt.want)
-			}
+			require.Nil(t, rc)
+			require.ErrorIs(t, err, tt.want)
 		})
 	}
 }
@@ -80,14 +76,11 @@ func TestNewReaderTagged(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			rc, err := NewReader(bytes.NewReader(tt.in))
-			if err != nil {
-				t.Fatalf("NewReader(%s) err = %v", tt.name, err)
-			}
+			require.NoError(t, err)
 			t.Cleanup(func() { rc.Close() })
 			n, err := rc.Read(make([]byte, 8))
-			if n != 0 || !errors.Is(err, io.ErrUnexpectedEOF) {
-				t.Fatalf("Read(%s) n=%d err=%v; want unexpected EOF", tt.name, n, err)
-			}
+			require.Zero(t, n)
+			require.ErrorIs(t, err, io.ErrUnexpectedEOF)
 		})
 	}
 }
@@ -97,57 +90,38 @@ func TestNewReaderVersion(t *testing.T) {
 	in := append([]byte(nil), rzwHead...)
 	in[3] = 0
 	rc, err := NewReader(bytes.NewReader(in))
-	if rc != nil {
-		t.Fatalf("reader = %T; want nil", rc)
-	}
-	if !errors.Is(err, errVersion) {
-		t.Fatalf("err = %v; want %v", err, errVersion)
-	}
+	require.Nil(t, rc)
+	require.ErrorIs(t, err, errVersion)
 }
 
 func TestNewReaderCorpus(t *testing.T) {
 	t.Parallel()
 	f := corpus.File(t, "fg-03.bin")
-	if _, err := f.Seek(0x1F, io.SeekStart); err != nil {
-		t.Fatal(err)
-	}
+	_, err := f.Seek(0x1F, io.SeekStart)
+	require.NoError(t, err)
 	rc, err := NewReader(f)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	t.Cleanup(func() { rc.Close() })
 	n, err := io.Copy(io.Discard, rc)
-	if err != nil {
-		t.Fatalf("Read n=%d err=%v", n, err)
-	}
-	if n == 0 {
-		t.Fatal("empty corpus output")
-	}
+	require.NoError(t, err)
+	require.NotZero(t, n)
 }
 
 func TestFG05Header(t *testing.T) {
 	t.Parallel()
 	f := corpus.File(t, "fg-05.bin")
-	if _, err := f.Seek(0x1F, io.SeekStart); err != nil {
-		t.Fatal(err)
-	}
+	_, err := f.Seek(0x1F, io.SeekStart)
+	require.NoError(t, err)
 	rc, err := NewReader(f)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	t.Cleanup(func() { rc.Close() })
-	rd, ok := rc.(*reader)
-	if !ok {
-		t.Fatalf("reader %T", rc)
-	}
-	if rd.hdr.prefix != 230566 || rd.hdr.indexOffset != 230542 {
-		t.Fatalf("hdr %#v", rd.hdr)
-	}
+	require.IsType(t, &reader{}, rc)
+	rd := rc.(*reader)
+	require.Equal(t, uint32(230566), rd.hdr.prefix)
+	require.Equal(t, uint64(230542), rd.hdr.indexOffset)
 	buf := make([]byte, 8)
 	n, err := rc.Read(buf)
-	if err != nil {
-		t.Fatalf("Read n=%d err=%v", n, err)
-	}
+	require.NoError(t, err)
 	if n > 0 {
 		t.Logf("decoded prefix %x", buf[:n])
 	}
@@ -157,51 +131,33 @@ func TestFG05Pipeline(t *testing.T) {
 	t.Parallel()
 	raw := corpus.ReadFile(t, "fg-05.bin")
 	solid, err := NewReader(bytes.NewReader(raw[31:]))
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	t.Cleanup(func() { solid.Close() })
 	del, err := delta.NewReader(solid)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	t.Cleanup(func() { del.Close() })
 	dis, err := dispack.NewReader(del)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	t.Cleanup(func() { dis.Close() })
 	var dhead [16]byte
 	dn, derr := io.ReadFull(dis, dhead[:])
 	t.Logf("dispack head n=%d %x err=%v", dn, dhead[:dn], derr)
 	sr, err := srep.NewReader(t.Context(), io.MultiReader(bytes.NewReader(dhead[:dn]), dis))
-	if err != nil {
-		if errors.Is(err, errCodec) {
-			t.Fatalf("rzw kernel: %v", err)
-		}
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	t.Cleanup(func() { sr.Close() })
 	plain, err := io.ReadAll(sr)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	off := 0
 	matched := 0
 	for _, m := range fg05Members {
-		if off+int(m.size) > len(plain) {
-			t.Fatalf("short solid at %s off=%d need=%d have=%d", m.path, off, m.size, len(plain)-off)
-		}
+		require.LessOrEqual(t, off+int(m.size), len(plain))
 		// Custom FreeArc polynomial recovered from the installer unarc DLL.
 		got := crc32.Checksum(plain[off:off+int(m.size)], crc32.MakeTable(0x0895171b))
-		if got != m.crc {
-			t.Fatalf("%s crc=%08x want %08x", m.path, got, m.crc)
-		}
+		require.Equal(t, m.crc, got)
 		t.Logf("ok %8d %08x %s", m.size, m.crc, m.path)
 		off += int(m.size)
 		matched++
 	}
-	if matched != len(fg05Members) || off != len(plain) {
-		t.Fatalf("matched %d members, consumed %d of %d bytes", matched, off, len(plain))
-	}
+	require.Equal(t, len(fg05Members), matched)
+	require.Equal(t, len(plain), off)
 }

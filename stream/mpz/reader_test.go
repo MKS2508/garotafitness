@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
-	"errors"
 	"hash/crc32"
 	"io"
 	"os"
@@ -13,6 +12,7 @@ import (
 	"github.com/lucasew/garotafitness/internal/corpus"
 	"github.com/lucasew/garotafitness/stream/fourx4"
 	"github.com/lucasew/garotafitness/stream/srep"
+	"github.com/stretchr/testify/require"
 )
 
 // First member in the optional solid (FreeArc custom CRC32).
@@ -46,12 +46,8 @@ func TestNewReader(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			rc, err := NewReader(t.Context(), tt.in)
-			if rc != nil {
-				t.Fatalf("NewReader(t.Context(), %s) reader = %T; want nil", tt.name, rc)
-			}
-			if !errors.Is(err, tt.want) {
-				t.Fatalf("NewReader(t.Context(), %s) err = %v; want %v", tt.name, err, tt.want)
-			}
+			require.Nil(t, rc)
+			require.ErrorIs(t, err, tt.want)
 		})
 	}
 }
@@ -60,14 +56,11 @@ func TestNewReaderTagged(t *testing.T) {
 	t.Parallel()
 	in := frameHead(version5451, 64, 1, 0)
 	rc, err := NewReader(t.Context(), bytes.NewReader(in))
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	t.Cleanup(func() { rc.Close() })
 	n, err := rc.Read(make([]byte, 8))
-	if n != 0 || err == nil {
-		t.Fatalf("Read n=%d err=%v; want error", n, err)
-	}
+	require.Zero(t, n)
+	require.Error(t, err)
 }
 
 func TestFourx4Inner(t *testing.T) {
@@ -75,61 +68,40 @@ func TestFourx4Inner(t *testing.T) {
 	payload := frameHead(version5451, 8, 1, 0)
 	in := frame4x4(8, payload)
 	inner := func(_ context.Context, r io.Reader, name, params string) (io.ReadCloser, error) {
-		if name != "mpz" || params != "" {
-			t.Fatalf("inner %q %q", name, params)
-		}
+		require.Equal(t, "mpz", name)
+		require.Empty(t, params)
 		return NewReader(t.Context(), r)
 	}
 	rd, err := fourx4.NewReader(t.Context(), bytes.NewReader(in), "b16mb:mpz", inner)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	t.Cleanup(func() { rd.Close() })
 	_, err = io.ReadAll(rd)
-	if err == nil {
-		t.Fatal("want inner decode error")
-	}
+	require.Error(t, err)
 }
 
 func TestOptionalOST(t *testing.T) {
 	t.Parallel()
 	f := corpus.File(t, "fg-optional-bonus-soundtrack.bin")
-	if _, err := f.Seek(0x1F, io.SeekStart); err != nil {
-		t.Fatal(err)
-	}
+	_, err := f.Seek(0x1F, io.SeekStart)
+	require.NoError(t, err)
 	var ver [4]byte
-	if _, err := io.ReadFull(f, ver[:]); err != nil {
-		t.Fatal(err)
-	}
-	if binary.LittleEndian.Uint32(ver[:]) != 0 {
-		t.Fatalf("4x4 version %x", ver)
-	}
+	_, err = io.ReadFull(f, ver[:])
+	require.NoError(t, err)
+	require.Zero(t, binary.LittleEndian.Uint32(ver[:]))
 	var hdr [8]byte
-	if _, err := io.ReadFull(f, hdr[:]); err != nil {
-		t.Fatal(err)
-	}
+	_, err = io.ReadFull(f, hdr[:])
+	require.NoError(t, err)
 	outSize := binary.LittleEndian.Uint32(hdr[0:4])
 	inSize := binary.LittleEndian.Uint32(hdr[4:8])
-	if outSize != 16<<20 {
-		t.Fatalf("first out %d", outSize)
-	}
+	require.Equal(t, uint32(16<<20), outSize)
 	head := make([]byte, headerLen)
-	if _, err := io.ReadFull(f, head); err != nil {
-		t.Fatal(err)
-	}
+	_, err = io.ReadFull(f, head)
+	require.NoError(t, err)
 	h, err := ParseHeader(bytes.NewReader(head))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if h.Version != version5451 {
-		t.Fatalf("mpz version %#x", h.Version)
-	}
-	if h.Orig != outSize {
-		t.Fatalf("mpz orig %d want %d", h.Orig, outSize)
-	}
-	if inSize < headerLen {
-		t.Fatalf("in %d", inSize)
-	}
+	require.NoError(t, err)
+	require.Equal(t, uint32(version5451), h.Version)
+	require.Equal(t, outSize, h.Orig)
+	require.GreaterOrEqual(t, inSize, uint32(headerLen))
 }
 
 func TestOptionalOSTFirstMP3(t *testing.T) {
@@ -138,49 +110,34 @@ func TestOptionalOSTFirstMP3(t *testing.T) {
 	}
 	t.Parallel()
 	f := corpus.File(t, "fg-optional-bonus-soundtrack.bin")
-	if _, err := f.Seek(0x1F, io.SeekStart); err != nil {
-		t.Fatal(err)
-	}
+	_, err := f.Seek(0x1F, io.SeekStart)
+	require.NoError(t, err)
 	var blk [12]byte
-	if _, err := io.ReadFull(f, blk[:]); err != nil {
-		t.Fatal(err)
-	}
+	_, err = io.ReadFull(f, blk[:])
+	require.NoError(t, err)
 	inSize := binary.LittleEndian.Uint32(blk[8:12])
-	if _, err := f.Seek(0x1F, io.SeekStart); err != nil {
-		t.Fatal(err)
-	}
-	inner := func(_ context.Context, r io.Reader, name, params string) (io.ReadCloser, error) {
-		if name != "mpz" {
-			t.Fatalf("inner %q", name)
-		}
+	_, err = f.Seek(0x1F, io.SeekStart)
+	require.NoError(t, err)
+	inner := func(_ context.Context, r io.Reader, name, _ string) (io.ReadCloser, error) {
+		require.Equal(t, "mpz", name)
 		return NewReader(t.Context(), r)
 	}
 	// One 4x4 member (version + sizes + payload). Full solid is 178MiB.
 	fx, err := fourx4.NewReader(t.Context(), io.LimitReader(f, int64(12+inSize)), "b16mb:mpz", inner)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	t.Cleanup(func() { fx.Close() })
 	got, err := io.ReadAll(fx)
-	if err != nil || len(got) == 0 {
-		t.Fatalf("mpz guest: %v n=%d", err, len(got))
-	}
-	if !bytes.HasPrefix(got, []byte{0x17, 0x18, 0x35, 0x26}) && !bytes.HasPrefix(got, []byte("SREP")) {
-		t.Fatalf("mpz guest: no srep prefix (%d bytes)", len(got))
-	}
+	require.NoError(t, err)
+	require.NotEmpty(t, got)
+	require.True(t, bytes.HasPrefix(got, []byte{0x17, 0x18, 0x35, 0x26}) || bytes.HasPrefix(got, []byte("SREP")))
 	sr, err := srep.NewReader(t.Context(), bytes.NewReader(got))
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	t.Cleanup(func() { sr.Close() })
 	first := make([]byte, firstMP3Size)
-	if _, err := io.ReadFull(sr, first); err != nil {
-		t.Fatal(err)
-	}
+	_, err = io.ReadFull(sr, first)
+	require.NoError(t, err)
 	sum := crc32.Checksum(first, crc32.MakeTable(0x0895171b))
-	if sum != firstMP3CRC {
-		t.Fatalf("%s crc %08x want %08x", firstMP3Path, sum, firstMP3CRC)
-	}
+	require.Equal(t, uint32(firstMP3CRC), sum)
 }
 
 func frame4x4(outSize uint32, data []byte) []byte {

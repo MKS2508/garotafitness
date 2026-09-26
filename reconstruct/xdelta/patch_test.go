@@ -5,6 +5,8 @@ import (
 	"encoding/binary"
 	"hash/adler32"
 	"testing"
+
+	"github.com/stretchr/testify/require"
 )
 
 func literalPatch(data []byte) []byte {
@@ -20,27 +22,23 @@ func TestApplyStreamMatchesMemory(t *testing.T) {
 	patch := literalPatch(want)
 	var buf bytes.Buffer
 	err := ApplyStream(t.Context(), bytes.NewReader(nil), 0, bytes.NewReader(patch), int64(len(patch)), SeqWriter(&buf))
-	if err != nil || !bytes.Equal(buf.Bytes(), want) {
-		t.Fatalf("%q %v", buf.Bytes(), err)
-	}
+	require.NoError(t, err)
+	require.Equal(t, want, buf.Bytes())
 }
 
 func TestApplyWindowChecksum(t *testing.T) {
 	want := []byte("hello, patch")
 	patch := literalPatch(want)
 	got, err := Apply(t.Context(), nil, patch)
-	if err != nil || !bytes.Equal(got, want) {
-		t.Fatalf("%q %v", got, err)
-	}
+	require.NoError(t, err)
+	require.Equal(t, want, got)
 	bad := bytes.Clone(patch)
 	bad[12] ^= 1
-	if _, err := Apply(t.Context(), nil, bad); err == nil {
-		t.Fatal("accepted bad window checksum")
-	}
+	_, err = Apply(t.Context(), nil, bad)
+	require.Error(t, err)
 	for n := 5; n < len(patch); n++ {
-		if _, err := targetSize(patch[:n]); err == nil {
-			t.Fatalf("accepted truncated envelope at %d", n)
-		}
+		_, err := targetSize(patch[:n])
+		require.Error(t, err)
 	}
 }
 
@@ -50,8 +48,7 @@ func TestTargetSizeBounds(t *testing.T) {
 		{0xd6, 0xc3, 0xc4, 0, 4, 0xff, 0xff, 0xff, 0xff, 0x7f},
 		{0xd6, 0xc3, 0xc4, 0, 0, 3},
 	} {
-		if _, err := targetSize(b); err == nil {
-			t.Fatalf("accepted %x", b)
-		}
+		_, err := targetSize(b)
+		require.Error(t, err)
 	}
 }

@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	lewpath "github.com/lewtec/lewkit/x/path"
+	"github.com/stretchr/testify/require"
 )
 
 func TestOfficialNoTable(t *testing.T) {
@@ -27,16 +28,10 @@ func TestHandcraftedUndiff(t *testing.T) {
 	diffed := []byte{0x00, 0xff, 0x01, 0x01}
 	in := packBlock(diffed, []tableDesc{{skip: 0, typ: 4, rows: 2}})
 	rd, err := NewReader(bytes.NewReader(in))
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	got, err := io.ReadAll(rd)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !bytes.Equal(got, plain) {
-		t.Fatalf("got %x want %x", got, plain)
-	}
+	require.NoError(t, err)
+	require.Equal(t, plain, got)
 }
 
 func TestUnreorder(t *testing.T) {
@@ -52,16 +47,10 @@ func TestUnreorder(t *testing.T) {
 	plain := []byte{'A', 'B', 'C', 'D', 'E', 'F'}
 	in := packBlock(plain, []tableDesc{{skip: 0, typ: 15, rows: 2}})
 	rd, err := NewReader(bytes.NewReader(in))
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	got, err := io.ReadAll(rd)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !bytes.Equal(got, plain) {
-		t.Fatalf("got %q", got)
-	}
+	require.NoError(t, err)
+	require.Equal(t, plain, got)
 
 	// Mixed: immutable col0 only. type=(1<<3)+1=9. doDiff [F,T,T]
 	// original: 10 01 02 / 10 03 05
@@ -71,62 +60,39 @@ func TestUnreorder(t *testing.T) {
 	want := []byte{0x10, 0x01, 0x02, 0x10, 0x03, 0x05}
 	in = packBlock(reordered, []tableDesc{{skip: 0, typ: 9, rows: 2}})
 	rd, err = NewReader(bytes.NewReader(in))
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	got, err = io.ReadAll(rd)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !bytes.Equal(got, want) {
-		t.Fatalf("got %x want %x", got, want)
-	}
+	require.NoError(t, err)
+	require.Equal(t, want, got)
 }
 
 func TestNewReaderNil(t *testing.T) {
 	t.Parallel()
-	if _, err := NewReader(nil); err == nil {
-		t.Fatal("want nil reader")
-	}
+	_, err := NewReader(nil)
+	require.Error(t, err)
 }
 
 func TestEmpty(t *testing.T) {
 	t.Parallel()
 	rd, err := NewReader(bytes.NewReader(nil))
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	got, err := io.ReadAll(rd)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(got) != 0 {
-		t.Fatalf("got %q", got)
-	}
+	require.NoError(t, err)
+	require.Empty(t, got)
 }
 
 func assertGolden(t *testing.T, packed, plain string) {
 	t.Helper()
 	td := testdataRoot(t)
 	in, err := lewpath.New(packed).ReadFile(td)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	want, err := lewpath.New(plain).ReadFile(td)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	rd, err := NewReader(bytes.NewReader(in))
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	got, err := io.ReadAll(rd)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !bytes.Equal(got, want) {
-		t.Fatalf("got %d bytes want %d", len(got), len(want))
-	}
+	require.NoError(t, err)
+	require.Equal(t, want, got)
 }
 
 type tableDesc struct {

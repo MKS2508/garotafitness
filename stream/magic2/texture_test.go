@@ -1,15 +1,15 @@
 package magic2
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/stretchr/testify/require"
+)
 
 func TestExplicitAlphaContext(t *testing.T) {
 	// VA 0x14002bde0: CDF at 0x285c00 + left*8704 + above*544 + diag*34.
-	if got := explicitAlphaContext(3, 1, 2); got != 3*8704+1*544+2*34 {
-		t.Fatalf("context %d", got)
-	}
-	if explicitAlphaContext(0, 0, 0) != 0 {
-		t.Fatal("zero context")
-	}
+	require.Equal(t, 3*8704+1*544+2*34, explicitAlphaContext(3, 1, 2))
+	require.Zero(t, explicitAlphaContext(0, 0, 0))
 }
 
 func TestExplicitAlphaNeighbors(t *testing.T) {
@@ -25,17 +25,11 @@ func TestExplicitAlphaNeighbors(t *testing.T) {
 	l0 := uint32(left[0]) | uint32(left[1])<<8 | uint32(left[2])<<16 | uint32(left[3])<<24
 	l1 := uint32(left[4]) | uint32(left[5])<<8 | uint32(left[6])<<16 | uint32(left[7])<<24
 	leftEdge := [4]int{int(l0>>12) & 15, int(l0>>28) & 15, int(l1>>12) & 15, int(l1>>28) & 15}
-	if leftEdge != [4]int{1, 2, 3, 4} {
-		t.Fatalf("left edge %v", leftEdge)
-	}
+	require.Equal(t, [4]int{1, 2, 3, 4}, leftEdge)
 	tb := uint32(top[4]) | uint32(top[5])<<8 | uint32(top[6])<<16 | uint32(top[7])<<24
 	topRow := [4]int{int(tb>>16) & 15, int(tb>>20) & 15, int(tb>>24) & 15, int(tb>>28) & 15}
-	if topRow != [4]int{5, 6, 7, 8} {
-		t.Fatalf("top row %v", topRow)
-	}
-	if got := explicitAlphaContext(leftEdge[0], topRow[0], leftEdge[0]); got != 1*8704+5*544+1*34 {
-		t.Fatalf("first pixel context %d", got)
-	}
+	require.Equal(t, [4]int{5, 6, 7, 8}, topRow)
+	require.Equal(t, 1*8704+5*544+1*34, explicitAlphaContext(leftEdge[0], topRow[0], leftEdge[0]))
 }
 
 func putNibble(b *[8]byte, pixel, v int) {

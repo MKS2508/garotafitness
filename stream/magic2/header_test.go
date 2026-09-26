@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	lewpath "github.com/lewtec/lewkit/x/path"
+	"github.com/stretchr/testify/require"
 )
 
 func TestHeader(t *testing.T) {
@@ -15,31 +16,29 @@ func TestHeader(t *testing.T) {
 	}{{"fg06.head", 16 << 20}, {"fg02.head", 480 << 20}} {
 		t.Run(tt.name, func(t *testing.T) {
 			b, err := lewpath.New(tt.name).ReadFile(testdataRoot(t))
-			if err != nil {
-				t.Fatal(err)
-			}
+			require.NoError(t, err)
 			r := bytes.NewReader(b)
 			h, err := ParseHeader(r)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if h.DictionarySize != tt.dictionary || !h.Mixed || h.Workers != 1 || h.Independent || h.ROLZ || h.LongDistance {
-				t.Fatalf("options: %+v", h)
-			}
-			if h.ClassShift != 4 || h.PredictionShift != 4 || h.HighShift != 0 || h.LowShift != 0 || h.WeightShift != 4 {
-				t.Fatalf("contexts: %+v", h)
-			}
+			require.NoError(t, err)
+			require.Equal(t, tt.dictionary, h.DictionarySize)
+			require.True(t, h.Mixed)
+			require.Equal(t, 1, h.Workers)
+			require.False(t, h.Independent)
+			require.False(t, h.ROLZ)
+			require.False(t, h.LongDistance)
+			require.Equal(t, uint(4), h.ClassShift)
+			require.Equal(t, uint(4), h.PredictionShift)
+			require.Zero(t, h.HighShift)
+			require.Zero(t, h.LowShift)
+			require.Equal(t, uint(4), h.WeightShift)
 			rest, _ := io.ReadAll(r)
-			if !bytes.Equal(rest, b[9:]) {
-				t.Fatal("wrong header boundary")
-			}
+			require.Equal(t, b[9:], rest)
 		})
 	}
 }
 func TestHeaderTruncated(t *testing.T) {
 	for n := 0; n < 9; n++ {
-		if _, err := ParseHeader(bytes.NewReader(make([]byte, n))); err == nil {
-			t.Fatalf("accepted %d bytes", n)
-		}
+		_, err := ParseHeader(bytes.NewReader(make([]byte, n)))
+		require.Error(t, err)
 	}
 }

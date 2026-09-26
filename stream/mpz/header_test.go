@@ -3,29 +3,26 @@ package mpz
 import (
 	"bytes"
 	"encoding/binary"
-	"errors"
 	"io"
 	"testing"
+
+	"github.com/stretchr/testify/require"
 )
 
 func TestParseHeader(t *testing.T) {
 	t.Parallel()
 	ok := frameHead(version5451, 16777216, 19968, 0)
 	h, err := ParseHeader(bytes.NewReader(ok))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if h.Version != version5451 || h.Orig != 16777216 || h.Frames != 19968 || h.Extra != 0 {
-		t.Fatalf("got %+v", h)
-	}
+	require.NoError(t, err)
+	require.Equal(t, uint32(version5451), h.Version)
+	require.Equal(t, uint32(16777216), h.Orig)
+	require.Equal(t, uint32(19968), h.Frames)
+	require.Zero(t, h.Extra)
 	old := frameHead(version5450, 100, 1, 0)[:4]
 	h, err = ParseHeader(bytes.NewReader(old))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if h.Version != version5450 || h.Orig != 0 {
-		t.Fatalf("got %+v", h)
-	}
+	require.NoError(t, err)
+	require.Equal(t, uint32(version5450), h.Version)
+	require.Zero(t, h.Orig)
 }
 
 func TestParseHeaderErrors(t *testing.T) {
@@ -44,9 +41,7 @@ func TestParseHeaderErrors(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			_, err := ParseHeader(bytes.NewReader(tt.in))
-			if !errors.Is(err, tt.want) {
-				t.Fatalf("err = %v; want %v", err, tt.want)
-			}
+			require.ErrorIs(t, err, tt.want)
 		})
 	}
 }
