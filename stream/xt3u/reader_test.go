@@ -8,6 +8,7 @@ import (
 
 	"github.com/lewtec/lewkit/x/test"
 	"github.com/lucasew/garotafitness/internal/corpus"
+	"github.com/lucasew/garotafitness/internal/xtl"
 	"github.com/lucasew/garotafitness/stream/magic2"
 	"github.com/lucasew/garotafitness/stream/srep"
 	"github.com/stretchr/testify/require"
@@ -126,7 +127,7 @@ func lz4hcSolid(raw, comp []byte, opt int32) []byte {
 	putI32(&b, 1) // one stream
 	putI64(&b, int64(len(raw)))
 	// TStreamHeader packed 18 bytes
-	var h [streamHeaderSize]byte
+	var h [xtl.StreamHeaderSize]byte
 	h[0] = kindDefault
 	binary.LittleEndian.PutUint32(h[1:5], uint32(len(comp)))
 	binary.LittleEndian.PutUint32(h[5:9], uint32(len(raw)))
@@ -161,7 +162,7 @@ func putI64(b *bytes.Buffer, v int64) {
 
 func TestContainsToken(t *testing.T) {
 	t.Parallel()
-	require.True(t, containsToken("unity:lz4hc:l12", "lz4hc"))
-	require.False(t, containsToken("unity:lz4hc:l12", "lz4h"))
+	require.True(t, xtl.ContainsToken("unity:lz4hc:l12", "lz4hc"))
+	require.False(t, xtl.ContainsToken("unity:lz4hc:l12", "lz4h"))
 	require.Contains(t, "unity:lz4hc:l12", "lz4")
 }

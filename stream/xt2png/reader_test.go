@@ -5,6 +5,7 @@ import (
 	"os"
 	"testing"
 
+	"github.com/lucasew/garotafitness/internal/xtl"
 	"github.com/stretchr/testify/require"
 )
 
@@ -23,7 +24,7 @@ func TestFS25FirstChunkRestore(t *testing.T) {
 	var got int
 	off := 0
 	for i := 0; i < 3; i++ {
-		sh, err := readStreamHeader(bytes.NewReader(rest[i*18:]))
+		sh, err := xtl.ReadStreamHeader(bytes.NewReader(rest[i*18:]))
 		require.NoError(t, err)
 		payload := rest[3*18+off : 3*18+off+int(sh.NewSize)]
 		off += int(sh.NewSize)
