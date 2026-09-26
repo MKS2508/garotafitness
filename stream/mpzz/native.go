@@ -15,15 +15,15 @@ type cachedHeaders struct {
 }
 
 type oggreDecoder struct {
-	r        io.Reader
-	h        header
-	cmd      *rangeDecoder
-	control  [18]uint16
-	previous uint32
-	models   []integerModel
-	probs    []uint16
-	cache    bookCache
-	headers  []cachedHeaders
+	r          io.Reader
+	h          header
+	cmd        *rangeDecoder
+	control    [18]uint16
+	previous   uint32
+	models     []integerModel
+	probs      []uint16
+	cache      bookCache
+	headers    []cachedHeaders
 	streams    [][]byte
 	lastStream []byte
 	dest       []byte
