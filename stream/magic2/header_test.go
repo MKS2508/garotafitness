@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	lewpath "github.com/lewtec/lewkit/x/path"
+	"github.com/lucasew/garotafitness/internal/fixtest"
 	"github.com/stretchr/testify/require"
 )
 
@@ -15,7 +16,7 @@ func TestHeader(t *testing.T) {
 		dictionary uint32
 	}{{"fg06.head", 16 << 20}, {"fg02.head", 480 << 20}} {
 		t.Run(tt.name, func(t *testing.T) {
-			b, err := lewpath.New(tt.name).ReadFile(testdataRoot(t))
+			b, err := lewpath.New(tt.name).ReadFile(fixtest.Root(t))
 			require.NoError(t, err)
 			r := bytes.NewReader(b)
 			h, err := ParseHeader(r)

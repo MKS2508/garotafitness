@@ -11,6 +11,7 @@ import (
 	lewpath "github.com/lewtec/lewkit/x/path"
 	"github.com/lewtec/lewkit/x/test"
 	"github.com/lucasew/garotafitness/internal/corpus"
+	"github.com/lucasew/garotafitness/internal/fixtest"
 	"github.com/lucasew/garotafitness/stream/srep"
 	"github.com/stretchr/testify/require"
 )
@@ -75,7 +76,7 @@ func TestNewReaderOGGRE(t *testing.T) {
 
 func TestHeaderHex(t *testing.T) {
 	t.Parallel()
-	raw, err := lewpath.New("header.hex").ReadFile(testdataRoot(t))
+	raw, err := lewpath.New("header.hex").ReadFile(fixtest.Root(t))
 	require.NoError(t, err)
 	var hexDigits strings.Builder
 	for _, line := range strings.Split(string(raw), "\n") {

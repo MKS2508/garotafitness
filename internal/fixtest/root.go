@@ -1,4 +1,5 @@
-package magic2
+// Package fixtest opens a package-local testdata directory for tests.
+package fixtest
 
 import (
 	"testing"
@@ -8,7 +9,8 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func testdataRoot(t *testing.T) *lewpath.Root {
+// Root opens ./testdata from the test process working directory.
+func Root(t testing.TB) *lewpath.Root {
 	t.Helper()
 	r, err := lewpath.Open("testdata")
 	require.NoError(t, err)
