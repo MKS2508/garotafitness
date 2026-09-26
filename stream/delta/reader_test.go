@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	lewpath "github.com/lewtec/lewkit/x/path"
+	"github.com/lucasew/garotafitness/internal/fixtest"
 	"github.com/stretchr/testify/require"
 )
 
@@ -83,7 +84,7 @@ func TestEmpty(t *testing.T) {
 
 func assertGolden(t *testing.T, packed, plain string) {
 	t.Helper()
-	td := testdataRoot(t)
+	td := fixtest.Root(t)
 	in, err := lewpath.New(packed).ReadFile(td)
 	require.NoError(t, err)
 	want, err := lewpath.New(plain).ReadFile(td)

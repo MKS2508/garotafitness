@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	lewpath "github.com/lewtec/lewkit/x/path"
+	"github.com/lucasew/garotafitness/internal/fixtest"
 	"github.com/stretchr/testify/require"
 )
 
@@ -33,7 +34,7 @@ func TestOfficialJumpTable(t *testing.T) {
 
 func TestUnfilterDirect(t *testing.T) {
 	t.Parallel()
-	td := testdataRoot(t)
+	td := fixtest.Root(t)
 	src, err := lewpath.New("code.filt").ReadFile(td)
 	require.NoError(t, err)
 	want, err := lewpath.New("code.plain").ReadFile(td)
@@ -71,7 +72,7 @@ func TestBadTag(t *testing.T) {
 
 func assertEXE(t *testing.T, filt, plain string) {
 	t.Helper()
-	td := testdataRoot(t)
+	td := fixtest.Root(t)
 	src, err := lewpath.New(filt).ReadFile(td)
 	require.NoError(t, err)
 	want, err := lewpath.New(plain).ReadFile(td)
