@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	lewpath "github.com/lewtec/lewkit/x/path"
+	"github.com/lewtec/lewkit/x/test"
 	"github.com/lucasew/garotafitness/internal/corpus"
 	"github.com/lucasew/garotafitness/setupdata"
 	"github.com/stretchr/testify/require"
@@ -39,16 +40,10 @@ func TestSongsOfConquestXT3UMembers(t *testing.T) {
 	require.Equal(t, AlgoXT3U, s.pipe[0].Algo)
 	end := s.off + int64(s.csz)
 	var r io.Reader = bytes.NewReader(data[s.off:end])
-	var closers []io.Closer
-	t.Cleanup(func() {
-		for i := len(closers) - 1; i >= 0; i-- {
-			closers[i].Close()
-		}
-	})
 	for i := len(s.pipe) - 1; i >= 0; i-- {
 		dec, err := Decode(t.Context(), r, s.pipe[i])
 		require.NoError(t, err)
-		closers = append(closers, dec)
+		test.CloseOnCleanup(t, dec)
 		r = dec
 	}
 	checked := 0

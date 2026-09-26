@@ -6,6 +6,7 @@ import (
 	"io"
 	"testing"
 
+	"github.com/lewtec/lewkit/x/test"
 	"github.com/lucasew/garotafitness/internal/corpus"
 	"github.com/stretchr/testify/require"
 )
@@ -25,7 +26,7 @@ func TestNewReader(t *testing.T) {
 	require.Error(t, err)
 	r, err := NewReader(t.Context(), bytes.NewReader(futureLZHead))
 	require.NoError(t, err)
-	t.Cleanup(func() { r.Close() })
+	test.CloseOnCleanup(t, r)
 	n, err := r.Read(make([]byte, 8))
 	require.Zero(t, n)
 	require.Equal(t, io.EOF, err)
@@ -36,7 +37,7 @@ func TestNewReaderLiterals(t *testing.T) {
 	plain := []byte("hello")
 	r, err := NewReader(t.Context(), bytes.NewReader(literalSolid(plain)))
 	require.NoError(t, err)
-	t.Cleanup(func() { r.Close() })
+	test.CloseOnCleanup(t, r)
 	got, err := io.ReadAll(r)
 	require.NoError(t, err)
 	require.Equal(t, plain, got)
@@ -49,7 +50,7 @@ func TestNewReaderCorpus(t *testing.T) {
 	require.NoError(t, err)
 	r, err := NewReader(t.Context(), f)
 	require.NoError(t, err)
-	t.Cleanup(func() { r.Close() })
+	test.CloseOnCleanup(t, r)
 	buf := make([]byte, 5)
 	_, err = io.ReadFull(r, buf)
 	require.NoError(t, err)

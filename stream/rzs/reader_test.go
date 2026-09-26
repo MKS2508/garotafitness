@@ -7,6 +7,7 @@ import (
 	"io"
 	"testing"
 
+	"github.com/lewtec/lewkit/x/test"
 	"github.com/lucasew/garotafitness/internal/corpus"
 	"github.com/stretchr/testify/require"
 )
@@ -110,7 +111,7 @@ func TestNewReaderCorpusHeader(t *testing.T) {
 	require.NoError(t, err)
 	rc, err := NewReader(f)
 	require.NoError(t, err)
-	t.Cleanup(func() { rc.Close() })
+	test.CloseOnCleanup(t, rc)
 }
 
 func sizeHdr(plain, packed uint64) []byte {

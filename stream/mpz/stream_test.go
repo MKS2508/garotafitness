@@ -6,6 +6,7 @@ import (
 	"io"
 	"testing"
 
+	"github.com/lewtec/lewkit/x/test"
 	"github.com/stretchr/testify/require"
 )
 
@@ -16,7 +17,7 @@ func TestRangeCodedLiterals(t *testing.T) {
 	require.NoError(t, err)
 	r, err := NewReader(t.Context(), bytes.NewReader(data))
 	require.NoError(t, err)
-	defer r.Close()
+	test.CloseOnCleanup(t, r)
 	got, err := io.ReadAll(r)
 	require.NoError(t, err)
 	require.Equal(t, "abc", string(got))
@@ -51,7 +52,7 @@ func TestOutputBound(t *testing.T) {
 func TestZeroLengthReadDoesNotDecode(t *testing.T) {
 	r, err := NewReader(t.Context(), bytes.NewReader(frameHead(version5451, 3, 0, 0)))
 	require.NoError(t, err)
-	defer r.Close()
+	test.CloseOnCleanup(t, r)
 	n, err := r.Read(nil)
 	require.NoError(t, err)
 	require.Zero(t, n)

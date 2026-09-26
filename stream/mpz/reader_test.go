@@ -9,6 +9,7 @@ import (
 	"os"
 	"testing"
 
+	"github.com/lewtec/lewkit/x/test"
 	"github.com/lucasew/garotafitness/internal/corpus"
 	"github.com/lucasew/garotafitness/stream/fourx4"
 	"github.com/lucasew/garotafitness/stream/srep"
@@ -57,7 +58,7 @@ func TestNewReaderTagged(t *testing.T) {
 	in := frameHead(version5451, 64, 1, 0)
 	rc, err := NewReader(t.Context(), bytes.NewReader(in))
 	require.NoError(t, err)
-	t.Cleanup(func() { rc.Close() })
+	test.CloseOnCleanup(t, rc)
 	n, err := rc.Read(make([]byte, 8))
 	require.Zero(t, n)
 	require.Error(t, err)
@@ -74,7 +75,7 @@ func TestFourx4Inner(t *testing.T) {
 	}
 	rd, err := fourx4.NewReader(t.Context(), bytes.NewReader(in), "b16mb:mpz", inner)
 	require.NoError(t, err)
-	t.Cleanup(func() { rd.Close() })
+	test.CloseOnCleanup(t, rd)
 	_, err = io.ReadAll(rd)
 	require.Error(t, err)
 }
@@ -125,14 +126,14 @@ func TestOptionalOSTFirstMP3(t *testing.T) {
 	// One 4x4 member (version + sizes + payload). Full solid is 178MiB.
 	fx, err := fourx4.NewReader(t.Context(), io.LimitReader(f, int64(12+inSize)), "b16mb:mpz", inner)
 	require.NoError(t, err)
-	t.Cleanup(func() { fx.Close() })
+	test.CloseOnCleanup(t, fx)
 	got, err := io.ReadAll(fx)
 	require.NoError(t, err)
 	require.NotEmpty(t, got)
 	require.True(t, bytes.HasPrefix(got, []byte{0x17, 0x18, 0x35, 0x26}) || bytes.HasPrefix(got, []byte("SREP")))
 	sr, err := srep.NewReader(t.Context(), bytes.NewReader(got))
 	require.NoError(t, err)
-	t.Cleanup(func() { sr.Close() })
+	test.CloseOnCleanup(t, sr)
 	first := make([]byte, firstMP3Size)
 	_, err = io.ReadFull(sr, first)
 	require.NoError(t, err)

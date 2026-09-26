@@ -7,6 +7,7 @@ import (
 	"io"
 	"testing"
 
+	"github.com/lewtec/lewkit/x/test"
 	"github.com/lucasew/garotafitness/internal/corpus"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -21,7 +22,7 @@ func TestFG06(t *testing.T) {
 	require.NoError(t, err)
 	r, err := NewReader(bytes.NewReader(data))
 	require.NoError(t, err)
-	defer r.Close()
+	test.CloseOnCleanup(t, r)
 	plain, err := io.ReadAll(r)
 	require.NoError(t, err)
 	require.Len(t, plain, 430889)

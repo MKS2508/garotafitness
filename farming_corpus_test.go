@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/lewtec/lewkit/x/test"
 	"github.com/lucasew/garotafitness/internal/corpus"
 	"github.com/lucasew/garotafitness/setupdata"
 	"github.com/stretchr/testify/require"
@@ -92,7 +93,7 @@ func TestFarmingSimulator25Fg07(t *testing.T) {
 	out := t.TempDir()
 	dst, err := OpenDirDest(out)
 	require.NoError(t, err)
-	t.Cleanup(func() { dst.Close() })
+	test.CloseOnCleanup(t, dst)
 	require.NoError(t, extractVolume(t.Context(), Extractor{Source: src, Dest: dst}, Volume{Name: "fg-07.bin"}, nil))
 	b, err := os.ReadFile(out + "/new.x5n")
 	require.NoError(t, err)

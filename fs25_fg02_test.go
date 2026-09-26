@@ -10,6 +10,7 @@ import (
 	"os"
 	"testing"
 
+	"github.com/lewtec/lewkit/x/test"
 	"github.com/lucasew/garotafitness/internal/corpus"
 	"github.com/lucasew/garotafitness/stream/mpzz"
 	"github.com/stretchr/testify/require"
@@ -19,7 +20,7 @@ func TestDumpFS25Fg02MpzzHead(t *testing.T) {
 	src := corpus.OpenEnv(t, fs25Corpus)
 	vol, err := src.Open("fg-02.bin")
 	require.NoError(t, err)
-	defer vol.Close()
+	test.CloseOnCleanup(t, vol)
 	st, err := vol.Stat()
 	require.NoError(t, err)
 	ra := vol.(interface {
@@ -38,16 +39,10 @@ func TestDumpFS25Fg02MpzzHead(t *testing.T) {
 
 	// Decode outer 4x4:tor and srep only. Leave 4x4:mpzz blocks intact.
 	var r io.Reader = io.NewSectionReader(ra, s.off, int64(s.csz))
-	var closers []io.Closer
-	t.Cleanup(func() {
-		for i := len(closers) - 1; i >= 0; i-- {
-			closers[i].Close()
-		}
-	})
 	for i := len(s.pipe) - 1; i >= 1; i-- {
 		dec, err := Decode(t.Context(), r, s.pipe[i])
 		require.NoError(t, err, s.pipe[i])
-		closers = append(closers, dec)
+		test.CloseOnCleanup(t, dec)
 		r = dec
 	}
 	head := make([]byte, 64)
@@ -60,7 +55,7 @@ func TestFS25Fg02FirstMpzzBlock(t *testing.T) {
 	src := corpus.OpenEnv(t, fs25Corpus)
 	vol, err := src.Open("fg-02.bin")
 	require.NoError(t, err)
-	defer vol.Close()
+	test.CloseOnCleanup(t, vol)
 	st, err := vol.Stat()
 	require.NoError(t, err)
 	ra := vol.(interface {
@@ -77,16 +72,10 @@ func TestFS25Fg02FirstMpzzBlock(t *testing.T) {
 	require.NotNil(t, s)
 
 	var r io.Reader = io.NewSectionReader(ra, s.off, int64(s.csz))
-	var closers []io.Closer
-	t.Cleanup(func() {
-		for i := len(closers) - 1; i >= 0; i-- {
-			closers[i].Close()
-		}
-	})
 	for i := len(s.pipe) - 1; i >= 1; i-- {
 		dec, err := Decode(t.Context(), r, s.pipe[i])
 		require.NoError(t, err, s.pipe[i])
-		closers = append(closers, dec)
+		test.CloseOnCleanup(t, dec)
 		r = dec
 	}
 
@@ -114,7 +103,7 @@ func TestFS25Fg02FirstMpzzBlock(t *testing.T) {
 
 	dec, err := Decode(t.Context(), bytes.NewReader(in), Atom{Algo: AlgoMPZZ})
 	require.NoError(t, err)
-	defer dec.Close()
+	test.CloseOnCleanup(t, dec)
 	got := make([]byte, 64)
 	n, err := io.ReadFull(dec, got)
 	t.Logf("mpzz first %d %v\n%s", n, err, hex.Dump(got[:max(0, n)]))
@@ -125,7 +114,7 @@ func TestFS25Fg02FirstBlockFull(t *testing.T) {
 	src := corpus.OpenEnv(t, fs25Corpus)
 	vol, err := src.Open("fg-02.bin")
 	require.NoError(t, err)
-	defer vol.Close()
+	test.CloseOnCleanup(t, vol)
 	st, err := vol.Stat()
 	require.NoError(t, err)
 	ra := vol.(interface {
@@ -141,16 +130,10 @@ func TestFS25Fg02FirstBlockFull(t *testing.T) {
 	}
 	require.NotNil(t, s)
 	var r io.Reader = io.NewSectionReader(ra, s.off, int64(s.csz))
-	var closers []io.Closer
-	t.Cleanup(func() {
-		for i := len(closers) - 1; i >= 0; i-- {
-			closers[i].Close()
-		}
-	})
 	for i := len(s.pipe) - 1; i >= 1; i-- {
 		dec, err := Decode(t.Context(), r, s.pipe[i])
 		require.NoError(t, err, s.pipe[i])
-		closers = append(closers, dec)
+		test.CloseOnCleanup(t, dec)
 		r = dec
 	}
 	var ver [4]byte
@@ -166,7 +149,7 @@ func TestFS25Fg02FirstBlockFull(t *testing.T) {
 	require.NoError(t, err)
 	dec, err := Decode(t.Context(), bytes.NewReader(in), Atom{Algo: AlgoMPZZ})
 	require.NoError(t, err)
-	defer dec.Close()
+	test.CloseOnCleanup(t, dec)
 	n, err := io.Copy(io.Discard, dec)
 	require.NoError(t, err)
 	t.Logf("block0 out=%d want=%d", n, outSize)
@@ -177,7 +160,7 @@ func TestFS25Fg02FirstStreamPages(t *testing.T) {
 	src := corpus.OpenEnv(t, fs25Corpus)
 	vol, err := src.Open("fg-02.bin")
 	require.NoError(t, err)
-	defer vol.Close()
+	test.CloseOnCleanup(t, vol)
 	st, err := vol.Stat()
 	require.NoError(t, err)
 	ra := vol.(interface {
@@ -192,16 +175,10 @@ func TestFS25Fg02FirstStreamPages(t *testing.T) {
 		break
 	}
 	var r io.Reader = io.NewSectionReader(ra, s.off, int64(s.csz))
-	var closers []io.Closer
-	t.Cleanup(func() {
-		for i := len(closers) - 1; i >= 0; i-- {
-			closers[i].Close()
-		}
-	})
 	for i := len(s.pipe) - 1; i >= 1; i-- {
 		dec, err := Decode(t.Context(), r, s.pipe[i])
 		require.NoError(t, err, s.pipe[i])
-		closers = append(closers, dec)
+		test.CloseOnCleanup(t, dec)
 		r = dec
 	}
 	var ver [4]byte
@@ -216,7 +193,7 @@ func TestFS25Fg02FirstStreamPages(t *testing.T) {
 	require.NoError(t, err)
 	dec, err := Decode(t.Context(), bytes.NewReader(in), Atom{Algo: AlgoMPZZ})
 	require.NoError(t, err)
-	defer dec.Close()
+	test.CloseOnCleanup(t, dec)
 	// One Read pulls one OGGRE record (next()).
 	buf := make([]byte, 1<<20)
 	n, err := dec.Read(buf)
@@ -265,7 +242,7 @@ func TestFS25Fg02DumpAllMpzzBlocks(t *testing.T) {
 	src := corpus.OpenEnv(t, fs25Corpus)
 	vol, err := src.Open("fg-02.bin")
 	require.NoError(t, err)
-	defer vol.Close()
+	test.CloseOnCleanup(t, vol)
 	st, err := vol.Stat()
 	require.NoError(t, err)
 	ra := vol.(interface {
@@ -281,16 +258,10 @@ func TestFS25Fg02DumpAllMpzzBlocks(t *testing.T) {
 	}
 	require.NotNil(t, s)
 	var r io.Reader = io.NewSectionReader(ra, s.off, int64(s.csz))
-	var closers []io.Closer
-	t.Cleanup(func() {
-		for i := len(closers) - 1; i >= 0; i-- {
-			closers[i].Close()
-		}
-	})
 	for i := len(s.pipe) - 1; i >= 1; i-- {
 		dec, err := Decode(t.Context(), r, s.pipe[i])
 		require.NoError(t, err, s.pipe[i])
-		closers = append(closers, dec)
+		test.CloseOnCleanup(t, dec)
 		r = dec
 	}
 	var ver [4]byte

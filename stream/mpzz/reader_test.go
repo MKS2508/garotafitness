@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	lewpath "github.com/lewtec/lewkit/x/path"
+	"github.com/lewtec/lewkit/x/test"
 	"github.com/lucasew/garotafitness/internal/corpus"
 	"github.com/lucasew/garotafitness/stream/srep"
 	"github.com/stretchr/testify/require"
@@ -57,7 +58,7 @@ func TestSlurpReaderAt(t *testing.T) {
 	got, err := slurp(bytes.NewReader(want))
 	require.NoError(t, err)
 	require.Equal(t, want, got)
-	got, err = slurp(io.LimitReader(bytes.NewReader(want), int64(len(want))))
+	got, err = slurp(test.OnlyReader{Reader: bytes.NewReader(want)})
 	require.NoError(t, err)
 	require.Equal(t, want, got)
 }
@@ -66,7 +67,7 @@ func TestNewReaderOGGRE(t *testing.T) {
 	t.Parallel()
 	rc, err := NewReader(t.Context(), bytes.NewReader(fg01Head))
 	require.NoError(t, err)
-	t.Cleanup(func() { rc.Close() })
+	test.CloseOnCleanup(t, rc)
 	n, err := rc.Read(make([]byte, 8))
 	require.Zero(t, n)
 	require.ErrorIs(t, err, io.ErrUnexpectedEOF)
@@ -100,10 +101,10 @@ func TestNewReaderCorpus(t *testing.T) {
 	require.NoError(t, err)
 	sr, err := srep.NewReader(t.Context(), f)
 	require.NoError(t, err)
-	t.Cleanup(func() { sr.Close() })
+	test.CloseOnCleanup(t, sr)
 	rc, err := NewReader(t.Context(), sr)
 	require.NoError(t, err)
-	t.Cleanup(func() { rc.Close() })
+	test.CloseOnCleanup(t, rc)
 	h := crc32.New(crc32.MakeTable(0x0895171b))
 	n, err := io.Copy(h, rc)
 	require.NoError(t, err)

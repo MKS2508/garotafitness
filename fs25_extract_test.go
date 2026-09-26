@@ -59,16 +59,10 @@ func TestFS25ExtractFirstFiles(t *testing.T) {
 			t.Logf("%s pipe=%s files=%d first=%s size=%d", name, s.pipe, len(s.files), s.files[0].Path, s.files[0].Size)
 
 			var r io.Reader = io.NewSectionReader(ra, s.off, int64(s.csz))
-			var closers []io.Closer
-			t.Cleanup(func() {
-				for i := len(closers) - 1; i >= 0; i-- {
-					closers[i].Close()
-				}
-			})
 			for i := len(s.pipe) - 1; i >= 0; i-- {
 				dec, err := Decode(t.Context(), r, s.pipe[i])
 				require.NoError(t, err, s.pipe[i])
-				closers = append(closers, dec)
+				test.CloseOnCleanup(t, dec)
 				r = dec
 			}
 			n := 3

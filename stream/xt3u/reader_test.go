@@ -6,6 +6,7 @@ import (
 	"io"
 	"testing"
 
+	"github.com/lewtec/lewkit/x/test"
 	"github.com/lucasew/garotafitness/internal/corpus"
 	"github.com/lucasew/garotafitness/stream/magic2"
 	"github.com/lucasew/garotafitness/stream/srep"
@@ -29,7 +30,7 @@ func TestNewReaderTailOnly(t *testing.T) {
 	plain := []byte("hello xt3u")
 	r, err := NewReader(t.Context(), bytes.NewReader(tailSolid(plain)))
 	require.NoError(t, err)
-	t.Cleanup(func() { r.Close() })
+	test.CloseOnCleanup(t, r)
 	got, err := io.ReadAll(r)
 	require.NoError(t, err)
 	require.Equal(t, plain, got)
@@ -43,13 +44,13 @@ func TestNewReaderLZ4HC(t *testing.T) {
 	raw := bytes.Repeat([]byte("Songs of Conquest "), 64)
 	g, err := openGuest(t.Context())
 	require.NoError(t, err)
-	t.Cleanup(func() { g.Close() })
+	test.CloseOnCleanup(t, g)
 	comp, err := g.compressHC(raw, 12, 0)
 	require.NoError(t, err)
 	opt := int32(1 | (12 << 3))
 	r, err := NewReader(t.Context(), bytes.NewReader(lz4hcSolid(raw, comp, opt)))
 	require.NoError(t, err)
-	t.Cleanup(func() { r.Close() })
+	test.CloseOnCleanup(t, r)
 	got, err := io.ReadAll(r)
 	require.NoError(t, err)
 	require.Equal(t, comp, got)
@@ -73,7 +74,7 @@ func TestNewReaderCorpusHead(t *testing.T) {
 	src := afterMagic2SREP(t)
 	r, err := NewReader(t.Context(), src)
 	require.NoError(t, err)
-	t.Cleanup(func() { r.Close() })
+	test.CloseOnCleanup(t, r)
 	head := make([]byte, 32)
 	_, err = io.ReadFull(r, head)
 	require.NoError(t, err)
@@ -87,10 +88,10 @@ func afterMagic2SREP(t *testing.T) io.Reader {
 	require.NoError(t, err)
 	m, err := magic2.NewReader(f)
 	require.NoError(t, err)
-	t.Cleanup(func() { m.Close() })
+	test.CloseOnCleanup(t, m)
 	s, err := srep.NewReader(t.Context(), m)
 	require.NoError(t, err)
-	t.Cleanup(func() { s.Close() })
+	test.CloseOnCleanup(t, s)
 	return s
 }
 

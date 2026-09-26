@@ -6,6 +6,7 @@ import (
 	"io"
 	"testing"
 
+	"github.com/lewtec/lewkit/x/test"
 	"github.com/lucasew/garotafitness/internal/corpus"
 	"github.com/lucasew/garotafitness/stream/delta"
 	"github.com/lucasew/garotafitness/stream/dispack"
@@ -77,7 +78,7 @@ func TestNewReaderTagged(t *testing.T) {
 			t.Parallel()
 			rc, err := NewReader(bytes.NewReader(tt.in))
 			require.NoError(t, err)
-			t.Cleanup(func() { rc.Close() })
+			test.CloseOnCleanup(t, rc)
 			n, err := rc.Read(make([]byte, 8))
 			require.Zero(t, n)
 			require.ErrorIs(t, err, io.ErrUnexpectedEOF)
@@ -101,7 +102,7 @@ func TestNewReaderCorpus(t *testing.T) {
 	require.NoError(t, err)
 	rc, err := NewReader(f)
 	require.NoError(t, err)
-	t.Cleanup(func() { rc.Close() })
+	test.CloseOnCleanup(t, rc)
 	n, err := io.Copy(io.Discard, rc)
 	require.NoError(t, err)
 	require.NotZero(t, n)
@@ -114,7 +115,7 @@ func TestFG05Header(t *testing.T) {
 	require.NoError(t, err)
 	rc, err := NewReader(f)
 	require.NoError(t, err)
-	t.Cleanup(func() { rc.Close() })
+	test.CloseOnCleanup(t, rc)
 	require.IsType(t, &reader{}, rc)
 	rd := rc.(*reader)
 	require.Equal(t, uint32(230566), rd.hdr.prefix)
@@ -132,19 +133,19 @@ func TestFG05Pipeline(t *testing.T) {
 	raw := corpus.ReadFile(t, "fg-05.bin")
 	solid, err := NewReader(bytes.NewReader(raw[31:]))
 	require.NoError(t, err)
-	t.Cleanup(func() { solid.Close() })
+	test.CloseOnCleanup(t, solid)
 	del, err := delta.NewReader(solid)
 	require.NoError(t, err)
-	t.Cleanup(func() { del.Close() })
+	test.CloseOnCleanup(t, del)
 	dis, err := dispack.NewReader(del)
 	require.NoError(t, err)
-	t.Cleanup(func() { dis.Close() })
+	test.CloseOnCleanup(t, dis)
 	var dhead [16]byte
 	dn, derr := io.ReadFull(dis, dhead[:])
 	t.Logf("dispack head n=%d %x err=%v", dn, dhead[:dn], derr)
 	sr, err := srep.NewReader(t.Context(), io.MultiReader(bytes.NewReader(dhead[:dn]), dis))
 	require.NoError(t, err)
-	t.Cleanup(func() { sr.Close() })
+	test.CloseOnCleanup(t, sr)
 	plain, err := io.ReadAll(sr)
 	require.NoError(t, err)
 	off := 0

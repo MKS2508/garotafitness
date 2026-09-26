@@ -7,6 +7,7 @@ import (
 
 	lewpath "github.com/lewtec/lewkit/x/path"
 	"github.com/lewtec/lewkit/x/test"
+	"github.com/stretchr/testify/require"
 )
 
 func Dir(t testing.TB) string {
@@ -51,9 +52,7 @@ func FileEnv(t testing.TB, env, name string) io.ReadSeeker {
 	}
 	test.CloseOnCleanup(t, f)
 	rs, ok := f.(io.ReadSeeker)
-	if !ok {
-		t.Fatalf("%s: %T is not a ReadSeeker", name, f)
-	}
+	require.Truef(t, ok, "%s: %T is not a ReadSeeker", name, f)
 	return rs
 }
 
