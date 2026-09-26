@@ -10,6 +10,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+
+	"github.com/lucasew/garotafitness/internal/chunkbuf"
 )
 
 const (
@@ -38,17 +40,14 @@ type reader struct {
 	src   io.Reader
 	chunk uint32
 	base  uint32
-	buf   []byte
-	off   int
-	err   error
-	eof   bool
+	chunkbuf.Reader
 }
 
 func (r *reader) readChunk() error {
 	var b [4]byte
 	n, err := io.ReadFull(r.src, b[:])
 	if n == 0 && (err == io.EOF || err == io.ErrUnexpectedEOF) {
-		r.eof = true
+		r.EOF = true
 		return nil
 	}
 	if err != nil {
@@ -62,34 +61,11 @@ func (r *reader) readChunk() error {
 }
 
 func (r *reader) Read(p []byte) (int, error) {
-	if r.err != nil && r.off >= len(r.buf) {
-		return 0, r.err
-	}
-	for r.off >= len(r.buf) {
-		if r.eof {
-			return 0, io.EOF
-		}
-		block, err := r.next()
-		if err == io.EOF {
-			r.eof = true
-			return 0, io.EOF
-		}
-		if err != nil {
-			r.err = err
-			return 0, err
-		}
-		r.buf = block
-		r.off = 0
-	}
-	n := copy(p, r.buf[r.off:])
-	r.off += n
-	return n, nil
+	return r.Reader.Read(p, r.next)
 }
 
 func (r *reader) Close() error {
-	r.err = errClosed
-	r.buf = nil
-	return nil
+	return r.Reader.Close(errClosed)
 }
 
 func (r *reader) next() ([]byte, error) {
