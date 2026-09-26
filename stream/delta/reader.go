@@ -11,6 +11,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+
+	"github.com/lucasew/garotafitness/internal/chunkbuf"
 )
 
 const maxElem = 30
@@ -25,41 +27,15 @@ func NewReader(r io.Reader) (io.ReadCloser, error) {
 
 type reader struct {
 	src io.Reader
-	buf []byte
-	off int
-	err error
-	eof bool
+	chunkbuf.Reader
 }
 
 func (r *reader) Read(p []byte) (int, error) {
-	if r.err != nil && r.off >= len(r.buf) {
-		return 0, r.err
-	}
-	for r.off >= len(r.buf) {
-		if r.eof {
-			return 0, io.EOF
-		}
-		block, err := r.next()
-		if err == io.EOF {
-			r.eof = true
-			return 0, io.EOF
-		}
-		if err != nil {
-			r.err = err
-			return 0, err
-		}
-		r.buf = block
-		r.off = 0
-	}
-	n := copy(p, r.buf[r.off:])
-	r.off += n
-	return n, nil
+	return r.Reader.Read(p, r.next)
 }
 
 func (r *reader) Close() error {
-	r.err = errClosed
-	r.buf = nil
-	return nil
+	return r.Reader.Close(errClosed)
 }
 
 func (r *reader) next() ([]byte, error) {
