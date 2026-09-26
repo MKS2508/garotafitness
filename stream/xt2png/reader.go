@@ -14,6 +14,8 @@ import (
 	"fmt"
 	"io"
 	"os"
+
+	"github.com/lucasew/garotafitness/internal/xtl"
 )
 
 const (
@@ -55,7 +57,7 @@ func NewReader(ctx context.Context, r io.Reader) (io.ReadCloser, error) {
 	}
 	rd := &reader{ctx: ctx, src: br, hdr: h, st: stNeedCount}
 	if len(h.Dups) > 0 {
-		rd.dd = newDedup(h.Dups)
+		rd.dd = xtl.NewDedup(h.Dups)
 	}
 	return rd, nil
 }
@@ -64,7 +66,7 @@ type reader struct {
 	ctx       context.Context
 	src       *bufio.Reader
 	hdr       Header
-	dd        *dedup
+	dd        *xtl.Dedup
 	g         *prefguest
 	headers   []streamHeader
 	block     []byte
@@ -117,7 +119,7 @@ func (r *reader) next() error {
 		case stNeedCount:
 			// Shipped xtool DecChunk reads StreamCount directly. Extra
 			// EncInit resources are not repeated per chunk.
-			sc, err := readI32(r.src)
+			sc, err := xtl.I32(r.src)
 			if err != nil {
 				if err == io.EOF || err == io.ErrUnexpectedEOF {
 					return io.EOF
@@ -127,7 +129,7 @@ func (r *reader) next() error {
 			if sc < 0 {
 				return io.EOF
 			}
-			bs, err := readI64(r.src)
+			bs, err := xtl.I64(r.src)
 			if err != nil {
 				return fmt.Errorf("xt2png: blocksize: %w", err)
 			}
@@ -142,7 +144,7 @@ func (r *reader) next() error {
 			}
 			r.headers = make([]streamHeader, sc)
 			for i := range r.headers {
-				h, err := readStreamHeader(r.src)
+				h, err := xtl.ReadStreamHeader(r.src)
 				if err != nil {
 					return fmt.Errorf("xt2png: stream header: %w", err)
 				}
@@ -162,7 +164,7 @@ func (r *reader) next() error {
 				r.st = stNeedFinal
 				continue
 			}
-			n, err := readU32(r.src)
+			n, err := xtl.U32(r.src)
 			if err != nil {
 				return fmt.Errorf("xt2png: stream tail: %w", err)
 			}
@@ -181,11 +183,11 @@ func (r *reader) next() error {
 			return nil
 		case stNeedRestore:
 			h := r.headers[r.si]
-			id := r.dd.begin()
+			id := r.dd.Begin()
 			var data []byte
 			var err error
 			if h.Kind&kindDuplicated == kindDuplicated {
-				data, err = r.dd.copy(h.Option)
+				data, err = xtl.CopyDup(r.dd, "xt2png", h.Option)
 			} else {
 				raw, ext, err2 := r.takeStream(h)
 				if err2 != nil {
@@ -193,7 +195,7 @@ func (r *reader) next() error {
 				}
 				data, err = r.restore(h, raw, ext)
 				if err == nil {
-					r.dd.save(id, data)
+					r.dd.Save(id, data)
 				}
 			}
 			r.si++
@@ -208,7 +210,7 @@ func (r *reader) next() error {
 			}
 			return nil
 		case stNeedFinal:
-			n, err := readU32(r.src)
+			n, err := xtl.U32(r.src)
 			if err != nil {
 				return fmt.Errorf("xt2png: tail: %w", err)
 			}
@@ -249,7 +251,7 @@ func (r *reader) takeStream(h streamHeader) (raw, ext []byte, err error) {
 		if n < 4 {
 			return nil, nil, fmt.Errorf("xt2png: extended size")
 		}
-		extSize := int(int32(le32(payload[n-4:])))
+		extSize := int(int32(xtl.U32LE(payload[n-4:])))
 		if extSize < 0 || 4+extSize > n {
 			return nil, nil, fmt.Errorf("xt2png: ext %d", extSize)
 		}
@@ -282,9 +284,9 @@ func (r *reader) restore(h streamHeader, raw, ext []byte) ([]byte, error) {
 			return raw, nil
 		}
 	}
-	sub := getBits(h.Option, 0, 3)
+	sub := xtl.Bits(h.Option, 0, 3)
 	switch {
-	case h.Codec == codecZLib && sub == subPNG, sub == subPNG && containsToken(r.hdr.Method, "png"):
+	case h.Codec == codecZLib && sub == subPNG, sub == subPNG && xtl.ContainsToken(r.hdr.Method, "png"):
 		out, err := decodePNG(raw, int(h.OldSize))
 		if err != nil {
 			if p := os.Getenv("XT2PNG_DUMP"); p != "" {
@@ -297,7 +299,7 @@ func (r *reader) restore(h streamHeader, raw, ext []byte) ([]byte, error) {
 			return nil, fmt.Errorf("xt2png: png got %d want %d", len(out), h.OldSize)
 		}
 		return out, nil
-	case h.Codec == codecZLib && sub == subPreflate, sub == subPreflate && containsToken(r.hdr.Method, "preflate"):
+	case h.Codec == codecZLib && sub == subPreflate, sub == subPreflate && xtl.ContainsToken(r.hdr.Method, "preflate"):
 		if err := r.ensureGuest(); err != nil {
 			return nil, err
 		}
@@ -330,80 +332,4 @@ func decodeChunk(ctx context.Context, payload []byte, hdr Header) ([]byte, error
 	rd := &reader{ctx: ctx, src: bufio.NewReader(bytes.NewReader(payload)), hdr: hdr, st: stNeedCount}
 	defer rd.Close()
 	return io.ReadAll(rd)
-}
-
-func containsToken(s, tok string) bool {
-	for i := 0; i+len(tok) <= len(s); i++ {
-		if s[i:i+len(tok)] != tok {
-			continue
-		}
-		if i > 0 {
-			c := s[i-1]
-			if c != '+' && c != ':' && c != ',' {
-				continue
-			}
-		}
-		if i+len(tok) < len(s) {
-			c := s[i+len(tok)]
-			if c != '+' && c != ':' && c != ',' {
-				continue
-			}
-		}
-		return true
-	}
-	return false
-}
-
-func le32(b []byte) uint32 {
-	return uint32(b[0]) | uint32(b[1])<<8 | uint32(b[2])<<16 | uint32(b[3])<<24
-}
-
-type dedup struct {
-	want  map[int32]int32
-	store map[int32][]byte
-	next  int32
-}
-
-func newDedup(dups []Dup) *dedup {
-	d := &dedup{want: make(map[int32]int32, len(dups)), store: make(map[int32][]byte, len(dups))}
-	for _, x := range dups {
-		if x.Count > 0 {
-			d.want[x.Index] = x.Count
-		}
-	}
-	return d
-}
-
-func (d *dedup) begin() int32 {
-	if d == nil {
-		return -1
-	}
-	id := d.next
-	d.next++
-	return id
-}
-
-func (d *dedup) save(id int32, data []byte) {
-	if d == nil || id < 0 {
-		return
-	}
-	if d.want[id] > 0 {
-		d.store[id] = append([]byte(nil), data...)
-	}
-}
-
-func (d *dedup) copy(src int32) ([]byte, error) {
-	if d == nil {
-		return nil, fmt.Errorf("xt2png: dup without table")
-	}
-	data, ok := d.store[src]
-	if !ok {
-		return nil, fmt.Errorf("xt2png: missing dup %d", src)
-	}
-	d.want[src]--
-	if d.want[src] <= 0 {
-		delete(d.store, src)
-		delete(d.want, src)
-	}
-	return append([]byte(nil), data...), nil
 }

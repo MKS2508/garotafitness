@@ -5,6 +5,7 @@ import (
 	"os"
 	"testing"
 
+	"github.com/lucasew/garotafitness/internal/xtl"
 	"github.com/stretchr/testify/require"
 )
 
@@ -26,10 +27,10 @@ func TestParseFS25Header(t *testing.T) {
 	require.Equal(t, int64(91), bs)
 	var sum int32
 	for i := 0; i < 3; i++ {
-		sh, err := readStreamHeader(bytes.NewReader(rest[i*18:]))
+		sh, err := xtl.ReadStreamHeader(bytes.NewReader(rest[i*18:]))
 		require.NoError(t, err)
 		require.Equal(t, byte(kindExtended), sh.Kind)
-		require.Equal(t, subPreflate, getBits(sh.Option, 0, 3))
+		require.Equal(t, subPreflate, xtl.Bits(sh.Option, 0, 3))
 		sum += sh.NewSize
 	}
 	require.Equal(t, bs, int64(sum))
