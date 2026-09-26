@@ -6,7 +6,9 @@ import (
 	"io"
 	"testing"
 
+	"github.com/lewtec/lewkit/x/test"
 	"github.com/lucasew/garotafitness/internal/corpus"
+	"github.com/stretchr/testify/require"
 )
 
 var futureLZHead = []byte{
@@ -18,67 +20,46 @@ var futureLZHead = []byte{
 
 func TestNewReader(t *testing.T) {
 	t.Parallel()
-	if _, err := NewReader(t.Context(), nil); err == nil {
-		t.Fatal("want nil reader error")
-	}
-	if _, err := NewReader(t.Context(), bytes.NewReader([]byte("ArC\x01"))); err == nil {
-		t.Fatal("want header error")
-	}
+	_, err := NewReader(t.Context(), nil)
+	require.Error(t, err)
+	_, err = NewReader(t.Context(), bytes.NewReader([]byte("ArC\x01")))
+	require.Error(t, err)
 	r, err := NewReader(t.Context(), bytes.NewReader(futureLZHead))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { r.Close() })
+	require.NoError(t, err)
+	test.CloseOnCleanup(t, r)
 	n, err := r.Read(make([]byte, 8))
-	if n != 0 || err != io.EOF {
-		t.Fatalf("empty solid: n=%d err=%v", n, err)
-	}
+	require.Zero(t, n)
+	require.Equal(t, io.EOF, err)
 }
 
 func TestNewReaderLiterals(t *testing.T) {
 	t.Parallel()
 	plain := []byte("hello")
 	r, err := NewReader(t.Context(), bytes.NewReader(literalSolid(plain)))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { r.Close() })
+	require.NoError(t, err)
+	test.CloseOnCleanup(t, r)
 	got, err := io.ReadAll(r)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !bytes.Equal(got, plain) {
-		t.Fatalf("got %q want %q", got, plain)
-	}
+	require.NoError(t, err)
+	require.Equal(t, plain, got)
 }
 
 func TestNewReaderCorpus(t *testing.T) {
 	t.Parallel()
 	f := corpus.File(t, "fg-01.bin")
-	if _, err := f.Seek(0x1F, io.SeekStart); err != nil {
-		t.Fatal(err)
-	}
+	_, err := f.Seek(0x1F, io.SeekStart)
+	require.NoError(t, err)
 	r, err := NewReader(t.Context(), f)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { r.Close() })
+	require.NoError(t, err)
+	test.CloseOnCleanup(t, r)
 	buf := make([]byte, 5)
-	if _, err := io.ReadFull(r, buf); err != nil {
-		t.Fatal(err)
-	}
-	if string(buf) != "OGGRE" {
-		t.Fatalf("inner magic %q", buf)
-	}
+	_, err = io.ReadFull(r, buf)
+	require.NoError(t, err)
+	require.Equal(t, "OGGRE", string(buf))
 	// FreeArc trailer after the last literal block is not an SREP header.
 	n, err := io.Copy(io.Discard, r)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	// 5 bytes already read + remainder = 216364145
-	if n+5 != 216364145 {
-		t.Fatalf("after-srep %d; want %d", n+5, 216364145)
-	}
+	require.Equal(t, int64(216364145), n+5)
 }
 
 func literalSolid(plain []byte) []byte {

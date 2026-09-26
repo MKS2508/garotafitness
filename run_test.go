@@ -14,7 +14,7 @@ func TestEachEmpty(t *testing.T) {
 	t.Parallel()
 	require.NoError(t, withSession(t.Context(), func(ctx context.Context) error {
 		return taskgroup.Each[int]{Name: "test", Items: nil, Fn: func(context.Context, *taskgroup.Status, int) error {
-			t.Fatal("ran")
+			require.FailNow(t, "ran")
 			return nil
 		}}.Run(ctx)
 	}))

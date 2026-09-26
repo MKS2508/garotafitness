@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"encoding/binary"
 	"testing"
+
+	"github.com/stretchr/testify/require"
 )
 
 func TestApply(t *testing.T) {
@@ -15,26 +17,20 @@ func TestApply(t *testing.T) {
 	patch = append(patch, 1, 17) // overlapping replacement wins
 	old := []byte{1, 2, 3, 4, 5}
 	out, err := Apply(old, patch)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	want := append([]byte{1, 2, 3}, bytes.Repeat([]byte{42}, 256)...)
 	want[4] = 17
 	want = append(want, 0)
-	if !bytes.Equal(out, want) || old[4] != 5 {
-		t.Fatal("incorrect sparse patch result")
-	}
+	require.Equal(t, want, out)
+	require.Equal(t, byte(5), old[4])
 	for _, n := range []int{0, 7, 9, 16, 17, len(patch) - 1} {
-		if _, err := Apply(old, patch[:n]); err == nil {
-			t.Fatalf("accepted truncated patch at %d", n)
-		}
+		_, err := Apply(old, patch[:n])
+		require.Error(t, err)
 	}
 	binary.LittleEndian.PutUint64(patch[8:], 259)
-	if _, err := Apply(old, patch); err == nil {
-		t.Fatal("accepted out of bounds write")
-	}
+	_, err = Apply(old, patch)
+	require.Error(t, err)
 	out, err = Apply(old, binary.LittleEndian.AppendUint64(nil, 2))
-	if err != nil || !bytes.Equal(out, []byte{1, 2}) {
-		t.Fatal("truncate", out, err)
-	}
+	require.NoError(t, err)
+	require.Equal(t, []byte{1, 2}, out)
 }

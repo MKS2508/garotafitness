@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	lewpath "github.com/lewtec/lewkit/x/path"
+	"github.com/stretchr/testify/require"
 )
 
 func TestTagData(t *testing.T) {
@@ -14,16 +15,10 @@ func TestTagData(t *testing.T) {
 	plain := []byte("hello dispack")
 	in := packData(16*1024, plain)
 	rd, err := NewReader(bytes.NewReader(in))
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	got, err := io.ReadAll(rd)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if string(got) != string(plain) {
-		t.Fatalf("got %q", got)
-	}
+	require.NoError(t, err)
+	require.Equal(t, plain, got)
 }
 
 func TestOfficialCode(t *testing.T) {
@@ -40,42 +35,27 @@ func TestUnfilterDirect(t *testing.T) {
 	t.Parallel()
 	td := testdataRoot(t)
 	src, err := lewpath.New("code.filt").ReadFile(td)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	want, err := lewpath.New("code.plain").ReadFile(td)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	got := make([]byte, len(want))
-	if !unfilter(src, got, baseStart) {
-		t.Fatal("unfilter failed")
-	}
-	if !bytes.Equal(got, want) {
-		t.Fatalf("got %x want %x", got, want)
-	}
+	require.True(t, unfilter(src, got, baseStart))
+	require.Equal(t, want, got)
 }
 
 func TestNewReaderNil(t *testing.T) {
 	t.Parallel()
-	if _, err := NewReader(nil); err == nil {
-		t.Fatal("want nil reader")
-	}
+	_, err := NewReader(nil)
+	require.Error(t, err)
 }
 
 func TestEmpty(t *testing.T) {
 	t.Parallel()
 	rd, err := NewReader(bytes.NewReader(nil))
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	got, err := io.ReadAll(rd)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(got) != 0 {
-		t.Fatalf("got %q", got)
-	}
+	require.NoError(t, err)
+	require.Empty(t, got)
 }
 
 func TestBadTag(t *testing.T) {
@@ -84,37 +64,24 @@ func TestBadTag(t *testing.T) {
 	putU32(&b, 16*1024)
 	putU32(&b, tagData+3)
 	rd, err := NewReader(bytes.NewReader(b.Bytes()))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := io.ReadAll(rd); err == nil {
-		t.Fatal("want tag error")
-	}
+	require.NoError(t, err)
+	_, err = io.ReadAll(rd)
+	require.Error(t, err)
 }
 
 func assertEXE(t *testing.T, filt, plain string) {
 	t.Helper()
 	td := testdataRoot(t)
 	src, err := lewpath.New(filt).ReadFile(td)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	want, err := lewpath.New(plain).ReadFile(td)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	in := packEXE(16*1024, src, uint32(len(want)))
 	rd, err := NewReader(bytes.NewReader(in))
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	got, err := io.ReadAll(rd)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !bytes.Equal(got, want) {
-		t.Fatalf("got %x want %x", got, want)
-	}
+	require.NoError(t, err)
+	require.Equal(t, want, got)
 }
 
 func packData(chunk uint32, data []byte) []byte {

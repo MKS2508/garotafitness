@@ -3,6 +3,8 @@ package srep
 import (
 	"bytes"
 	"testing"
+
+	"github.com/stretchr/testify/require"
 )
 
 func TestParseHeaderFutureLZ(t *testing.T) {
@@ -15,21 +17,14 @@ func TestParseHeaderFutureLZ(t *testing.T) {
 		0x00, 0x00, 0x00, 0x00,
 	}
 	h, err := ParseHeader(bytes.NewReader(in))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if h.Format != FormatFutureLZ {
-		t.Fatalf("format %d", h.Format)
-	}
-	if h.HashNum != 1 || h.BaseLen != 0 {
-		t.Fatalf("%+v", h)
-	}
+	require.NoError(t, err)
+	require.Equal(t, FormatFutureLZ, h.Format)
+	require.Equal(t, uint8(1), h.HashNum)
+	require.Zero(t, h.BaseLen)
 }
 
 func TestParseHeaderRejectsArc(t *testing.T) {
 	t.Parallel()
 	_, err := ParseHeader(bytes.NewReader([]byte("ArC\x01\x00\x00\x06\x07storing!!")))
-	if err == nil {
-		t.Fatal("want error")
-	}
+	require.Error(t, err)
 }

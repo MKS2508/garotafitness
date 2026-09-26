@@ -3,17 +3,16 @@ package sevenz
 import (
 	"bytes"
 	"testing"
+
+	"github.com/stretchr/testify/require"
 )
 
 func TestEncodeMagic(t *testing.T) {
 	t.Parallel()
 	out, err := Encode(t.Context(), []File{{Name: "a.txt", Data: []byte("hello sevenz")}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(out) < 32 || !bytes.Equal(out[:6], []byte{0x37, 0x7a, 0xbc, 0xaf, 0x27, 0x1c}) {
-		t.Fatalf("magic %x", out[:min(6, len(out))])
-	}
+	require.NoError(t, err)
+	require.GreaterOrEqual(t, len(out), 32)
+	require.Equal(t, []byte{0x37, 0x7a, 0xbc, 0xaf, 0x27, 0x1c}, out[:6])
 }
 func TestEncodeHeaderMatches7zip2602(t *testing.T) {
 	t.Parallel()
@@ -36,38 +35,27 @@ func TestEncodeHeaderMatches7zip2602(t *testing.T) {
 		0x00, 0x69, 0x00, 0x6e, 0x00, 0x6e, 0x00, 0x65, 0x00, 0x72, 0x00, 0x2f, 0x00, 0x30, 0x00, 0x30, 0x00, 0x30, 0x00, 0x30, 0x00, 0x32, 0x00, 0x2e, 0x00, 0x66, 0x00, 0x67, 0x00, 0x75, 0x00, 0x00,
 		0x00, 0x15, 0x0a, 0x01, 0x00, 0x20, 0x00, 0x00, 0x00, 0x20, 0x00, 0x00, 0x00, 0x00, 0x00,
 	}
-	if !bytes.Equal(got, want) {
-		t.Fatalf("header\n got %x\nwant %x", got, want)
-	}
+	require.Equal(t, want, got)
 }
 
 func TestRoundDict(t *testing.T) {
 	t.Parallel()
-	if got := roundDict(377333); got != 384<<10 {
-		t.Fatalf("377333 -> %d", got)
-	}
-	if got := roundDict(18); got != 4096 {
-		t.Fatalf("18 -> %d", got)
-	}
+	require.Equal(t, uint32(384<<10), roundDict(377333))
+	require.Equal(t, uint32(4096), roundDict(18))
 }
 
 func TestWriteNumber(t *testing.T) {
 	t.Parallel()
 	var b bytes.Buffer
 	writeNumber(&b, 142)
-	if !bytes.Equal(b.Bytes(), []byte{0x80, 0x8e}) {
-		t.Fatalf("142 -> %x", b.Bytes())
-	}
+	require.Equal(t, []byte{0x80, 0x8e}, b.Bytes())
 	b.Reset()
 	writeNumber(&b, 91)
-	if !bytes.Equal(b.Bytes(), []byte{0x5b}) {
-		t.Fatalf("91 -> %x", b.Bytes())
-	}
+	require.Equal(t, []byte{0x5b}, b.Bytes())
 }
 
 func TestEncodeEmpty(t *testing.T) {
 	t.Parallel()
-	if _, err := Encode(t.Context(), nil); err == nil {
-		t.Fatal("accepted empty")
-	}
+	_, err := Encode(t.Context(), nil)
+	require.Error(t, err)
 }

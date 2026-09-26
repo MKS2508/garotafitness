@@ -2,27 +2,21 @@ package pref
 
 import (
 	"bytes"
-	"errors"
 	"io"
 	"os"
-	"strings"
 	"testing"
+
+	"github.com/stretchr/testify/require"
 )
 
 func TestNewReader(t *testing.T) {
 	t.Parallel()
 	_, err := NewReader(t.Context(), nil)
-	if !errors.Is(err, errNil) {
-		t.Fatalf("nil: %v", err)
-	}
+	require.ErrorIs(t, err, errNil)
 	_, err = NewReader(t.Context(), bytes.NewReader(nil))
-	if err == nil {
-		t.Fatal("accepted empty")
-	}
+	require.Error(t, err)
 	_, err = NewReader(t.Context(), bytes.NewReader([]byte("ArC\x01xxxx")))
-	if err == nil {
-		t.Fatal("accepted non-PCF")
-	}
+	require.Error(t, err)
 }
 
 func testdataPlain(t *testing.T) []byte {
@@ -50,19 +44,11 @@ func TestRoundTrip(t *testing.T) {
 	plain := testdataPlain(t)
 	pcf := testdataPCF(t)
 	rc, err := NewReader(t.Context(), bytes.NewReader(pcf))
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	got, err := io.ReadAll(rc)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := rc.Close(); err != nil {
-		t.Fatal(err)
-	}
-	if !bytes.Equal(got, plain) {
-		t.Fatalf("got %d bytes %q; want %d %q", len(got), got, len(plain), plain)
-	}
+	require.NoError(t, err)
+	require.NoError(t, rc.Close())
+	require.Equal(t, plain, got)
 }
 
 func TestInstantiateGuest(t *testing.T) {
@@ -73,7 +59,5 @@ func TestInstantiateGuest(t *testing.T) {
 	if err == nil {
 		return
 	}
-	if strings.Contains(err.Error(), "is not exported") {
-		t.Fatal(err)
-	}
+	require.NotContains(t, err.Error(), "is not exported")
 }

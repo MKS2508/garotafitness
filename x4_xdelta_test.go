@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/lewtec/lewkit/x/test"
 	"github.com/lucasew/garotafitness/internal/corpus"
 	"github.com/lucasew/garotafitness/reconstruct/x4"
 	"github.com/lucasew/garotafitness/reconstruct/xdelta"
@@ -100,7 +101,7 @@ func harvestFg01(t *testing.T, keep func(string) bool) map[string][]byte {
 	src := corpus.OpenEnv(t, fs25Corpus)
 	f, err := src.Open("fg-01.bin")
 	require.NoError(t, err)
-	t.Cleanup(func() { f.Close() })
+	test.CloseOnCleanup(t, f)
 	st, err := f.Stat()
 	require.NoError(t, err)
 	ra, ok := f.(io.ReaderAt)
@@ -115,16 +116,10 @@ func harvestFg01(t *testing.T, keep func(string) bool) map[string][]byte {
 	}
 	require.NotNil(t, s)
 	r := io.Reader(io.NewSectionReader(ra, s.off, int64(s.csz)))
-	var closers []io.Closer
-	t.Cleanup(func() {
-		for i := len(closers) - 1; i >= 0; i-- {
-			closers[i].Close()
-		}
-	})
 	for i := len(s.pipe) - 1; i >= 0; i-- {
 		dec, err := Decode(t.Context(), r, s.pipe[i])
 		require.NoError(t, err, s.pipe[i])
-		closers = append(closers, dec)
+		test.CloseOnCleanup(t, dec)
 		r = dec
 	}
 	out := map[string][]byte{}

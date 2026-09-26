@@ -2,19 +2,18 @@ package setupdata
 
 import (
 	"bytes"
-	"errors"
 	"strings"
 	"testing"
 
 	"github.com/lucasew/garotafitness/internal/corpus"
+	"github.com/stretchr/testify/require"
 	ulzma "github.com/ulikunitz/xz/lzma"
 )
 
 func TestScanNil(t *testing.T) {
 	t.Parallel()
-	if _, err := Scan(nil); !errors.Is(err, errNil) {
-		t.Fatalf("got %v", err)
-	}
+	_, err := Scan(nil)
+	require.ErrorIs(t, err, errNil)
 }
 
 func TestScanPlain(t *testing.T) {
@@ -26,15 +25,10 @@ func TestScanPlain(t *testing.T) {
 		"[External compressor:mpzz]\r\n" +
 		"header = 0\r\n")
 	info, err := Scan(bytes.NewReader(in))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !hasAll(info.Encoders, "srep", "mpzz") {
-		t.Fatalf("encoders %v", info.Encoders)
-	}
-	if !strings.Contains(info.ArcINI, "[External compressor:srep]") {
-		t.Fatalf("arc.ini %q", info.ArcINI)
-	}
+	require.NoError(t, err)
+	require.Contains(t, info.Encoders, "srep")
+	require.Contains(t, info.Encoders, "mpzz")
+	require.Contains(t, info.ArcINI, "[External compressor:srep]")
 }
 
 func TestScanZLB(t *testing.T) {
@@ -43,39 +37,21 @@ func TestScanZLB(t *testing.T) {
 		"[External compressor:rzw]\r\n" +
 		"unpackcmd = rzw d f2 f1 128 128\r\n")
 	info, err := Scan(bytes.NewReader(packZLB(t, plain)))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !hasAll(info.Encoders, "rzw") {
-		t.Fatalf("encoders %v", info.Encoders)
-	}
-	if !strings.Contains(info.ArcINI, "[External compressor:rzw]") {
-		t.Fatalf("arc.ini %q", info.ArcINI)
-	}
+	require.NoError(t, err)
+	require.Contains(t, info.Encoders, "rzw")
+	require.Contains(t, info.ArcINI, "[External compressor:rzw]")
 }
 
 func TestScanCorpus(t *testing.T) {
 	t.Parallel()
 	f := corpus.File(t, "setup.exe")
 	info, err := Scan(f)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if n := strings.Count(info.InstalledMD5, "\n"); n != 1712 {
-		t.Fatalf("installed manifest has %d entries, want 1712", n)
-	}
-	if len(info.Encoders) == 0 {
-		t.Fatal("empty encoder list")
-	}
-	if !hasAll(info.Encoders, "srep") {
-		t.Fatalf("missing srep in %v", info.Encoders)
-	}
-	if !hasAny(info.Encoders, "mpzz", "magic2", "rzw") {
-		t.Fatalf("missing mpzz/magic2/rzw in %v", info.Encoders)
-	}
-	if !strings.Contains(info.ArcINI, "[External compressor:") {
-		t.Fatalf("arc.ini missing: %q", clip(info.ArcINI, 120))
-	}
+	require.NoError(t, err)
+	require.Equal(t, 1712, strings.Count(info.InstalledMD5, "\n"))
+	require.NotEmpty(t, info.Encoders)
+	require.Contains(t, info.Encoders, "srep")
+	require.True(t, hasAny(info.Encoders, "mpzz", "magic2", "rzw"))
+	require.Contains(t, info.ArcINI, "[External compressor:")
 }
 
 func packZLB(t *testing.T, plain []byte) []byte {
@@ -85,25 +61,11 @@ func packZLB(t *testing.T, plain []byte) []byte {
 	buf.WriteString(zlbMagic)
 	buf.WriteByte(8) // LZMA2 prop for 64 KiB
 	w, err := ulzma.Writer2Config{DictCap: dict}.NewWriter2(&buf)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := w.Write(plain); err != nil {
-		t.Fatal(err)
-	}
-	if err := w.Close(); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
+	_, err = w.Write(plain)
+	require.NoError(t, err)
+	require.NoError(t, w.Close())
 	return buf.Bytes()
-}
-
-func hasAll(got []string, want ...string) bool {
-	for _, w := range want {
-		if !hasAny(got, w) {
-			return false
-		}
-	}
-	return true
 }
 
 func hasAny(got []string, want ...string) bool {
@@ -115,13 +77,6 @@ func hasAny(got []string, want ...string) bool {
 		}
 	}
 	return false
-}
-
-func clip(s string, n int) string {
-	if len(s) <= n {
-		return s
-	}
-	return s[:n]
 }
 
 func TestInstalledManifestEncoding(t *testing.T) {
@@ -136,12 +91,8 @@ func TestInstalledManifestEncoding(t *testing.T) {
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			input := append([]byte("\x00unrelated\x00"), tt.encoded...)
-			if got := installedMD5(input); got != tt.want {
-				t.Fatalf("got %q; want %q", got, tt.want)
-			}
+			require.Equal(t, tt.want, installedMD5(input))
 		})
 	}
-	if got := installedMD5([]byte("900150983cd24fb0d6963f7d28e17f72 *..\\truncated")); got != "" {
-		t.Fatalf("accepted unterminated manifest: %q", got)
-	}
+	require.Empty(t, installedMD5([]byte("900150983cd24fb0d6963f7d28e17f72 *..\\truncated")))
 }

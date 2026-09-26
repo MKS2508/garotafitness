@@ -3,15 +3,16 @@ package mpzz
 import (
 	"bytes"
 	"encoding/hex"
-	"errors"
 	"hash/crc32"
 	"io"
 	"strings"
 	"testing"
 
 	lewpath "github.com/lewtec/lewkit/x/path"
+	"github.com/lewtec/lewkit/x/test"
 	"github.com/lucasew/garotafitness/internal/corpus"
 	"github.com/lucasew/garotafitness/stream/srep"
+	"github.com/stretchr/testify/require"
 )
 
 // fg-01 after SREP: testdata/header.hex.
@@ -45,12 +46,8 @@ func TestNewReader(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			rc, err := NewReader(t.Context(), tt.in)
-			if rc != nil {
-				t.Fatalf("NewReader(ctx, %s) reader = %T; want nil", tt.name, rc)
-			}
-			if !errors.Is(err, tt.want) {
-				t.Fatalf("NewReader(ctx, %s) err = %v; want %v", tt.name, err, tt.want)
-			}
+			require.Nil(t, rc)
+			require.ErrorIs(t, err, tt.want)
 		})
 	}
 }
@@ -59,40 +56,27 @@ func TestSlurpReaderAt(t *testing.T) {
 	t.Parallel()
 	want := []byte("OGGRE\x00\x09hello")
 	got, err := slurp(bytes.NewReader(want))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !bytes.Equal(got, want) {
-		t.Fatalf("ReaderAt slurp %q; want %q", got, want)
-	}
-	got, err = slurp(io.LimitReader(bytes.NewReader(want), int64(len(want))))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !bytes.Equal(got, want) {
-		t.Fatalf("ReadAll slurp %q; want %q", got, want)
-	}
+	require.NoError(t, err)
+	require.Equal(t, want, got)
+	got, err = slurp(test.OnlyReader{Reader: bytes.NewReader(want)})
+	require.NoError(t, err)
+	require.Equal(t, want, got)
 }
 
 func TestNewReaderOGGRE(t *testing.T) {
 	t.Parallel()
 	rc, err := NewReader(t.Context(), bytes.NewReader(fg01Head))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { rc.Close() })
+	require.NoError(t, err)
+	test.CloseOnCleanup(t, rc)
 	n, err := rc.Read(make([]byte, 8))
-	if n != 0 || !errors.Is(err, io.ErrUnexpectedEOF) {
-		t.Fatalf("truncated command: n=%d err=%v", n, err)
-	}
+	require.Zero(t, n)
+	require.ErrorIs(t, err, io.ErrUnexpectedEOF)
 }
 
 func TestHeaderHex(t *testing.T) {
 	t.Parallel()
 	raw, err := lewpath.New("header.hex").ReadFile(testdataRoot(t))
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	var hexDigits strings.Builder
 	for _, line := range strings.Split(string(raw), "\n") {
 		if i := strings.IndexByte(line, '#'); i >= 0 {
@@ -106,40 +90,24 @@ func TestHeaderHex(t *testing.T) {
 		}, line))
 	}
 	got, err := hex.DecodeString(hexDigits.String())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !bytes.Equal(got, fg01Head) {
-		t.Fatalf("testdata/header.hex = %x; want %x", got, fg01Head)
-	}
+	require.NoError(t, err)
+	require.Equal(t, fg01Head, got)
 }
 
 func TestNewReaderCorpus(t *testing.T) {
 	t.Parallel()
 	f := corpus.File(t, "fg-01.bin")
-	if _, err := f.Seek(fg01SolidOff, io.SeekStart); err != nil {
-		t.Fatal(err)
-	}
+	_, err := f.Seek(fg01SolidOff, io.SeekStart)
+	require.NoError(t, err)
 	sr, err := srep.NewReader(t.Context(), f)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { sr.Close() })
+	require.NoError(t, err)
+	test.CloseOnCleanup(t, sr)
 	rc, err := NewReader(t.Context(), sr)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { rc.Close() })
+	require.NoError(t, err)
+	test.CloseOnCleanup(t, rc)
 	h := crc32.New(crc32.MakeTable(0x0895171b))
 	n, err := io.Copy(h, rc)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if n != fg01InnerSize {
-		t.Fatalf("size %d; want %d", n, fg01InnerSize)
-	}
-	got := h.Sum32()
-	if got != fg01InnerCRC {
-		t.Fatalf("crc32 %08x; want %08x", got, fg01InnerCRC)
-	}
+	require.NoError(t, err)
+	require.Equal(t, int64(fg01InnerSize), n)
+	require.Equal(t, uint32(fg01InnerCRC), h.Sum32())
 }

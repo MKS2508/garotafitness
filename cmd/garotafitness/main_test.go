@@ -2,7 +2,6 @@ package main
 
 import (
 	"bytes"
-	"strings"
 	"testing"
 
 	"github.com/lewtec/lewkit/x/cmd"
@@ -67,24 +66,22 @@ func TestPrintInspectDropsRecipes(t *testing.T) {
 		Volumes: []garotafitness.InspectVolume{{Name: "fg-01.bin", Size: 3 << 30, Files: 2, Pipeline: "rzs"}},
 	})
 	got := buf.String()
-	if !strings.Contains(got, "volumes") || !strings.Contains(got, "registered") || !strings.Contains(got, "tools") {
-		t.Fatalf("%q", got)
-	}
-	if !strings.Contains(got, "SIZE") || !strings.Contains(got, "3.0 GiB") {
-		t.Fatalf("missing volume size: %q", got)
-	}
-	if strings.Contains(got, "recipes") || strings.Contains(got, "programs") {
-		t.Fatalf("leftover sections: %q", got)
-	}
+	require.Contains(t, got, "volumes")
+	require.Contains(t, got, "registered")
+	require.Contains(t, got, "tools")
+	require.Contains(t, got, "SIZE")
+	require.Contains(t, got, "3.0 GiB")
+	require.NotContains(t, got, "recipes")
+	require.NotContains(t, got, "programs")
 }
 
 func TestPrintRecipes(t *testing.T) {
 	t.Parallel()
 	var buf bytes.Buffer
 	printRecipes(&buf, garotafitness.RecipeReport{})
-	if got := buf.String(); !strings.Contains(got, "recipes") || !strings.Contains(got, "(none)") {
-		t.Fatalf("%q", got)
-	}
+	got := buf.String()
+	require.Contains(t, got, "recipes")
+	require.Contains(t, got, "(none)")
 	buf.Reset()
 	printRecipes(&buf, garotafitness.RecipeReport{
 		Recipes: []garotafitness.Recipe{{
@@ -96,10 +93,10 @@ func TestPrintRecipes(t *testing.T) {
 			},
 		}},
 	})
-	got := buf.String()
-	if !strings.Contains(got, "mover/mover.bat") || !strings.Contains(got, "2×") || !strings.Contains(got, "all prior") {
-		t.Fatalf("%q", got)
-	}
+	got = buf.String()
+	require.Contains(t, got, "mover/mover.bat")
+	require.Contains(t, got, "2×")
+	require.Contains(t, got, "all prior")
 
 	buf.Reset()
 	var many []garotafitness.RecipeGroup
@@ -112,10 +109,8 @@ func TestPrintRecipes(t *testing.T) {
 		Recipes: []garotafitness.Recipe{{Path: "big.bat", Lines: 31, Groups: many}},
 	})
 	got = buf.String()
-	if !strings.Contains(got, "10×") || !strings.Contains(got, "(20 other groups)") || !strings.Contains(got, "all prior") {
-		t.Fatalf("%q", got)
-	}
-	if strings.Contains(got, "move unique") {
-		t.Fatalf("did not collapse unique rows: %q", got)
-	}
+	require.Contains(t, got, "10×")
+	require.Contains(t, got, "(20 other groups)")
+	require.Contains(t, got, "all prior")
+	require.NotContains(t, got, "move unique")
 }

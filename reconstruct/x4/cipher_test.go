@@ -1,8 +1,9 @@
 package x4
 
 import (
-	"bytes"
 	"testing"
+
+	"github.com/stretchr/testify/require"
 )
 
 func TestEncryptFS15Zeros(t *testing.T) {
@@ -19,14 +20,10 @@ func TestEncryptFS15Zeros(t *testing.T) {
 		0x69, 0x67, 0xfc, 0x76, 0x1f, 0x55, 0x18, 0x00,
 		0x33, 0xbf, 0x03, 0xab, 0x6f, 0x3f, 0x3b, 0x3d,
 	}
-	if !bytes.Equal(got, want) {
-		t.Fatalf("encrypt zeros\ngot  %x\nwant %x", got, want)
-	}
+	require.Equal(t, want, got)
 	c2 := newFarmCipher(key)
 	c2.decrypt(got)
-	if !bytes.Equal(got, plain) {
-		t.Fatalf("roundtrip zeros\ngot  %x\nwant %x", got, plain)
-	}
+	require.Equal(t, plain, got)
 }
 
 func TestEncryptFS13BFirstEntry(t *testing.T) {
@@ -45,12 +42,8 @@ func TestEncryptFS13BFirstEntry(t *testing.T) {
 	got := append([]byte(nil), plain...)
 	c := newFarmCipher(key)
 	c.encrypt(got)
-	if !bytes.Equal(got, want) {
-		t.Fatalf("encrypt\ngot  %x\nwant %x", got, want)
-	}
+	require.Equal(t, want, got)
 	c2 := newFarmCipher(key)
 	c2.decrypt(got)
-	if !bytes.Equal(got, plain) {
-		t.Fatalf("roundtrip\ngot  %x\nwant %x", got, plain)
-	}
+	require.Equal(t, plain, got)
 }

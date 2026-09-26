@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"encoding/binary"
 	"testing"
+
+	"github.com/stretchr/testify/require"
 )
 
 func testRecordBytes() []byte {
@@ -49,33 +51,26 @@ func testRecordBytes() []byte {
 func TestParseAndApplyRecord(t *testing.T) {
 	data := testRecordBytes()
 	records, err := Parse(data)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(records) != 1 || records[0].Source != "Data/Я.txt" || records[0].Target != "Data/Я.txt" {
-		t.Fatalf("%+v", records)
-	}
+	require.NoError(t, err)
+	require.Len(t, records, 1)
+	require.Equal(t, "Data/Я.txt", records[0].Source)
+	require.Equal(t, "Data/Я.txt", records[0].Target)
 	out, err := records[0].Apply(t.Context(), []byte("abc"))
-	if err != nil || string(out) != "abd" {
-		t.Fatalf("%q %v", out, err)
-	}
+	require.NoError(t, err)
+	require.Equal(t, "abd", string(out))
 	for n := range len(data) {
-		if _, err := Parse(data[:n]); err == nil {
-			t.Fatalf("accepted truncation at %d", n)
-		}
+		_, err := Parse(data[:n])
+		require.Error(t, err)
 	}
 	bad := bytes.Clone(data)
 	binary.LittleEndian.PutUint32(bad[32:], 2)
-	if _, err := Parse(bad); err == nil {
-		t.Fatal("accepted wrong record count")
-	}
-	if _, err := Parse(append(data, 0)); err == nil {
-		t.Fatal("accepted trailing bytes")
-	}
+	_, err = Parse(bad)
+	require.Error(t, err)
+	_, err = Parse(append(data, 0))
+	require.Error(t, err)
 	bad = bytes.Replace(data, []byte("\x9f.txt"), []byte("../xx"), 1)
-	if _, err := Parse(bad); err == nil {
-		t.Fatal("accepted escaping path")
-	}
+	_, err = Parse(bad)
+	require.Error(t, err)
 }
 
 func TestVariableIntegerBounds(t *testing.T) {
@@ -89,15 +84,12 @@ func TestVariableIntegerBounds(t *testing.T) {
 	} {
 		r := cursor{data: tt.data}
 		got := r.vli()
-		if r.err != nil || got != tt.want {
-			t.Fatalf("%x: %d %v", tt.data, got, r.err)
-		}
+		require.NoError(t, r.err)
+		require.Equal(t, tt.want, got)
 	}
 	for _, data := range [][]byte{{0x7c}, {0x40}, {0x60, 0}} {
 		r := cursor{data: data}
 		r.vli()
-		if r.err == nil {
-			t.Fatalf("accepted %x", data)
-		}
+		require.Error(t, r.err)
 	}
 }

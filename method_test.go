@@ -2,49 +2,29 @@ package garotafitness
 
 import (
 	"testing"
+
+	"github.com/stretchr/testify/require"
 )
 
 func TestParsePipeline(t *testing.T) {
 	t.Parallel()
 	p := ParsePipeline("mpzz+srep:m3f:mem228mb")
-	if p.String() != "mpzz+srep:m3f:mem228mb" {
-		t.Fatalf("got %q", p.String())
-	}
-	if len(p) != 2 || p[0].Algo != AlgoMPZZ || p[1].Algo != AlgoSREP {
-		t.Fatalf("got %+v", p)
-	}
-	if p[1].Params != "m3f:mem228mb" {
-		t.Fatalf("params %q", p[1].Params)
-	}
-	if p.Last().Algo != AlgoSREP {
-		t.Fatal(p.Last())
-	}
+	require.Equal(t, "mpzz+srep:m3f:mem228mb", p.String())
+	require.Len(t, p, 2)
+	require.Equal(t, AlgoMPZZ, p[0].Algo)
+	require.Equal(t, AlgoSREP, p[1].Algo)
+	require.Equal(t, "m3f:mem228mb", p[1].Params)
+	require.Equal(t, AlgoSREP, p.Last().Algo)
 }
 
 func TestParseAlgoAliases(t *testing.T) {
 	t.Parallel()
-	if ParseAlgo("dispack070") != AlgoDispack {
-		t.Fatal("dispack")
-	}
-	if ParseAlgo("rzwb") != AlgoRZW {
-		t.Fatal("rzw")
-	}
-	if ParseAlgo("rzs") != AlgoRZS {
-		t.Fatal("rzs")
-	}
-	if ParseAlgo("pref") != AlgoPref {
-		t.Fatal("pref")
-	}
-	if ParseAlgo("xt3u") != AlgoXT3U {
-		t.Fatal("xt3u")
-	}
-	if ParseAlgo("xt2png") != AlgoXT2PNG {
-		t.Fatal("xt2png")
-	}
-	if ParseAlgo("tor") != AlgoTOR {
-		t.Fatal("tor")
-	}
-	if ParseAlgo("nope").Known() {
-		t.Fatal("want invalid")
-	}
+	require.Equal(t, AlgoDispack, ParseAlgo("dispack070"))
+	require.Equal(t, AlgoRZW, ParseAlgo("rzwb"))
+	require.Equal(t, AlgoRZS, ParseAlgo("rzs"))
+	require.Equal(t, AlgoPref, ParseAlgo("pref"))
+	require.Equal(t, AlgoXT3U, ParseAlgo("xt3u"))
+	require.Equal(t, AlgoXT2PNG, ParseAlgo("xt2png"))
+	require.Equal(t, AlgoTOR, ParseAlgo("tor"))
+	require.False(t, ParseAlgo("nope").Known())
 }

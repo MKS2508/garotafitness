@@ -1,30 +1,26 @@
 package srep
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/stretchr/testify/require"
+)
 
 func TestClassIndex(t *testing.T) {
 	t.Parallel()
-	if classIndex(1) != 0 || classIndex(64) != 0 {
-		t.Fatalf("64-class %d %d", classIndex(1), classIndex(64))
-	}
-	if classIndex(65) != 1 || classIndex(128) != 1 {
-		t.Fatalf("128-class %d %d", classIndex(65), classIndex(128))
-	}
-	if classIndex(maxBlock) != numClass-1 {
-		t.Fatalf("max %d want %d", classIndex(maxBlock), numClass-1)
-	}
+	require.Equal(t, 0, classIndex(1))
+	require.Equal(t, 0, classIndex(64))
+	require.Equal(t, 1, classIndex(65))
+	require.Equal(t, 1, classIndex(128))
+	require.Equal(t, numClass-1, classIndex(maxBlock))
 }
 
 func TestGetPutSameClass(t *testing.T) {
 	t.Parallel()
 	a := getBuf(100)
-	if cap(a) != 128 {
-		t.Fatalf("cap %d", cap(a))
-	}
+	require.Equal(t, 128, cap(a))
 	putBuf(a)
 	b := getBuf(100)
-	if cap(b) != 128 {
-		t.Fatalf("cap %d", cap(b))
-	}
+	require.Equal(t, 128, cap(b))
 	putBuf(b)
 }

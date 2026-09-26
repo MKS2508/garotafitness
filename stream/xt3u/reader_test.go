@@ -3,47 +3,37 @@ package xt3u
 import (
 	"bytes"
 	"encoding/binary"
-	"errors"
 	"io"
-	"strings"
 	"testing"
 
+	"github.com/lewtec/lewkit/x/test"
 	"github.com/lucasew/garotafitness/internal/corpus"
 	"github.com/lucasew/garotafitness/stream/magic2"
 	"github.com/lucasew/garotafitness/stream/srep"
+	"github.com/stretchr/testify/require"
 )
 
 func TestNewReaderNilShortBadMagic(t *testing.T) {
 	t.Parallel()
-	if _, err := NewReader(t.Context(), nil); !errors.Is(err, errNil) {
-		t.Fatalf("nil: %v", err)
-	}
-	if _, err := NewReader(t.Context(), bytes.NewReader(nil)); err == nil {
-		t.Fatal("want short error")
-	}
-	if _, err := NewReader(t.Context(), bytes.NewReader([]byte("XXXX"))); !errors.Is(err, errBadMagic) {
-		t.Fatalf("magic: %v", err)
-	}
-	if _, err := NewReader(t.Context(), bytes.NewReader([]byte("XTL"))); err == nil {
-		t.Fatal("want short magic")
-	}
+	_, err := NewReader(t.Context(), nil)
+	require.ErrorIs(t, err, errNil)
+	_, err = NewReader(t.Context(), bytes.NewReader(nil))
+	require.Error(t, err)
+	_, err = NewReader(t.Context(), bytes.NewReader([]byte("XXXX")))
+	require.ErrorIs(t, err, errBadMagic)
+	_, err = NewReader(t.Context(), bytes.NewReader([]byte("XTL")))
+	require.Error(t, err)
 }
 
 func TestNewReaderTailOnly(t *testing.T) {
 	t.Parallel()
 	plain := []byte("hello xt3u")
 	r, err := NewReader(t.Context(), bytes.NewReader(tailSolid(plain)))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { r.Close() })
+	require.NoError(t, err)
+	test.CloseOnCleanup(t, r)
 	got, err := io.ReadAll(r)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !bytes.Equal(got, plain) {
-		t.Fatalf("got %q want %q", got, plain)
-	}
+	require.NoError(t, err)
+	require.Equal(t, plain, got)
 }
 
 func TestNewReaderLZ4HC(t *testing.T) {
@@ -53,81 +43,55 @@ func TestNewReaderLZ4HC(t *testing.T) {
 	}
 	raw := bytes.Repeat([]byte("Songs of Conquest "), 64)
 	g, err := openGuest(t.Context())
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { g.Close() })
+	require.NoError(t, err)
+	test.CloseOnCleanup(t, g)
 	comp, err := g.compressHC(raw, 12, 0)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	opt := int32(1 | (12 << 3))
 	r, err := NewReader(t.Context(), bytes.NewReader(lz4hcSolid(raw, comp, opt)))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { r.Close() })
+	require.NoError(t, err)
+	test.CloseOnCleanup(t, r)
 	got, err := io.ReadAll(r)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !bytes.Equal(got, comp) {
-		t.Fatalf("restored %d want %d", len(got), len(comp))
-	}
+	require.NoError(t, err)
+	require.Equal(t, comp, got)
 }
 
 func TestParseHeaderSOC(t *testing.T) {
 	src := afterMagic2SREP(t)
 	h, err := parseHeader(src)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if h.Method != "unity:lz4hc:l12" {
-		t.Fatalf("method %q", h.Method)
-	}
-	if h.Depth != 3 || h.Compressed != 0 || h.StoreDD != -1 {
-		t.Fatalf("hdr %+v", h)
-	}
-	if len(h.Resources) != 1 || h.Resources[0].Name != "gk.key" || len(h.Resources[0].Data) != 32 {
-		t.Fatalf("resources %+v", h.Resources)
-	}
-	if len(h.Dups) != 7 {
-		t.Fatalf("dups %d", len(h.Dups))
-	}
+	require.NoError(t, err)
+	require.Equal(t, "unity:lz4hc:l12", h.Method)
+	require.Equal(t, int32(3), h.Depth)
+	require.Zero(t, h.Compressed)
+	require.Equal(t, int32(-1), h.StoreDD)
+	require.Len(t, h.Resources, 1)
+	require.Equal(t, "gk.key", h.Resources[0].Name)
+	require.Len(t, h.Resources[0].Data, 32)
+	require.Len(t, h.Dups, 7)
 }
 
 func TestNewReaderCorpusHead(t *testing.T) {
 	src := afterMagic2SREP(t)
 	r, err := NewReader(t.Context(), src)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { r.Close() })
+	require.NoError(t, err)
+	test.CloseOnCleanup(t, r)
 	head := make([]byte, 32)
-	if _, err := io.ReadFull(r, head); err != nil {
-		t.Fatal(err)
-	}
-	if !bytes.HasPrefix(head, []byte("<configuration>\n")) {
-		t.Fatalf("first bytes %q", head)
-	}
+	_, err = io.ReadFull(r, head)
+	require.NoError(t, err)
+	require.Equal(t, []byte("<configuration>\n"), head[:len("<configuration>\n")])
 }
 
 func afterMagic2SREP(t *testing.T) io.Reader {
 	t.Helper()
 	f := corpus.FileEnv(t, "GAROTAFITNESS_CORPUS_SOC", "fg-03.bin")
-	if _, err := f.Seek(31, io.SeekStart); err != nil {
-		t.Fatal(err)
-	}
+	_, err := f.Seek(31, io.SeekStart)
+	require.NoError(t, err)
 	m, err := magic2.NewReader(f)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { m.Close() })
+	require.NoError(t, err)
+	test.CloseOnCleanup(t, m)
 	s, err := srep.NewReader(t.Context(), m)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { s.Close() })
+	require.NoError(t, err)
+	test.CloseOnCleanup(t, s)
 	return s
 }
 
@@ -197,13 +161,7 @@ func putI64(b *bytes.Buffer, v int64) {
 
 func TestContainsToken(t *testing.T) {
 	t.Parallel()
-	if !containsToken("unity:lz4hc:l12", "lz4hc") {
-		t.Fatal("lz4hc")
-	}
-	if containsToken("unity:lz4hc:l12", "lz4h") {
-		t.Fatal("partial")
-	}
-	if !strings.Contains("unity:lz4hc:l12", "lz4") {
-		t.Fatal("setup")
-	}
+	require.True(t, containsToken("unity:lz4hc:l12", "lz4hc"))
+	require.False(t, containsToken("unity:lz4hc:l12", "lz4h"))
+	require.Contains(t, "unity:lz4hc:l12", "lz4")
 }

@@ -5,6 +5,8 @@ import (
 	"hash/crc32"
 	"os"
 	"testing"
+
+	"github.com/stretchr/testify/require"
 )
 
 func TestDecodePNGRoundTrip(t *testing.T) {
@@ -12,37 +14,24 @@ func TestDecodePNGRoundTrip(t *testing.T) {
 	orig := minimalPNG()
 	enc := encodePNG(orig)
 	got, err := decodePNG(enc, len(orig))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if string(got) != string(orig) {
-		t.Fatalf("got %d want %d", len(got), len(orig))
-	}
+	require.NoError(t, err)
+	require.Equal(t, orig, got)
 }
 
 func TestDecodePNGFlagDeNested(t *testing.T) {
 	raw, err := os.ReadFile("testdata/flag-de.nested.bin")
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	r := &reader{hdr: Header{Method: "png+preflate"}}
 	got, err := r.restore(streamHeader{Kind: kindNested, OldSize: 86, NewSize: 1201, Codec: 5, Option: 3}, raw, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(got) != 86 {
-		t.Fatalf("got %d want 86", len(got))
-	}
-	if binary.LittleEndian.Uint64(got[:8]) != pngSig {
-		t.Fatalf("not png %x", got[:8])
-	}
+	require.NoError(t, err)
+	require.Len(t, got, 86)
+	require.Equal(t, uint64(pngSig), binary.LittleEndian.Uint64(got[:8]))
 }
 
 func TestDecodePNGBadSig(t *testing.T) {
 	t.Parallel()
-	if _, err := decodePNG([]byte("not a png!!!!!!!"), 16); err == nil {
-		t.Fatal("accepted")
-	}
+	_, err := decodePNG([]byte("not a png!!!!!!!"), 16)
+	require.Error(t, err)
 }
 
 func minimalPNG() []byte {

@@ -55,7 +55,7 @@ func TestSongsOfConquestPrefHeader(t *testing.T) {
 		require.Equal(t, []byte{0, 4, 8, 0}, head[3:7])
 		return
 	}
-	t.Fatal("no pref solid")
+	require.FailNow(t, "no pref solid")
 }
 
 func TestSongsOfConquestPipelines(t *testing.T) {
@@ -78,9 +78,7 @@ func TestSongsOfConquestPipelines(t *testing.T) {
 					continue
 				}
 				found = true
-				if m.Pipeline.Last().Algo != last {
-					t.Fatalf("%s last %s want %s (%s)", m.Path, m.Pipeline.Last().Algo, last, m.Pipeline)
-				}
+				require.Equal(t, last, m.Pipeline.Last().Algo, "%s (%s)", m.Path, m.Pipeline)
 			}
 			require.True(t, found, "no file members")
 		})

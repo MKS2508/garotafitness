@@ -3,38 +3,30 @@ package x5n
 import (
 	"os"
 	"testing"
+
+	"github.com/stretchr/testify/require"
 )
 
 func TestParseFS25Head(t *testing.T) {
 	t.Parallel()
 	b, err := os.ReadFile("testdata/head.bin")
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	info, err := Parse(b)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(info.OldPaths) != 2 || info.OldPaths[1] != "inner.fgpack" {
-		t.Fatalf("old paths %q", info.OldPaths)
-	}
-	if len(info.NewPaths) != 9 || info.NewPaths[1] != "shared/" {
-		t.Fatalf("new paths %q", info.NewPaths)
-	}
-	if info.OldRefSize != 1226032094 || info.NewRefSize != 1633847662 {
-		t.Fatalf("ref sizes %d %d", info.OldRefSize, info.NewRefSize)
-	}
-	if len(info.OldRefs) != 1 || len(info.NewRefs) != 7 || len(info.NewRefSizes) != 7 {
-		t.Fatalf("refs old=%d new=%d sizes=%d", len(info.OldRefs), len(info.NewRefs), len(info.NewRefSizes))
-	}
-	if info.OldPaths[info.OldRefs[0]] != "inner.fgpack" {
-		t.Fatalf("old ref %q", info.OldPaths[info.OldRefs[0]])
-	}
+	require.NoError(t, err)
+	require.Len(t, info.OldPaths, 2)
+	require.Equal(t, "inner.fgpack", info.OldPaths[1])
+	require.Len(t, info.NewPaths, 9)
+	require.Equal(t, "shared/", info.NewPaths[1])
+	require.Equal(t, uint64(1226032094), info.OldRefSize)
+	require.Equal(t, uint64(1633847662), info.NewRefSize)
+	require.Len(t, info.OldRefs, 1)
+	require.Len(t, info.NewRefs, 7)
+	require.Len(t, info.NewRefSizes, 7)
+	require.Equal(t, "inner.fgpack", info.OldPaths[info.OldRefs[0]])
 }
 
 func TestParseRejectsHDIFF13(t *testing.T) {
 	t.Parallel()
-	if _, err := Parse([]byte("HDIFF13&")); err == nil {
-		t.Fatal("accepted HDIFF13")
-	}
+	_, err := Parse([]byte("HDIFF13&"))
+	require.Error(t, err)
 }

@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/lewtec/lewkit/x/test"
 	"github.com/lucasew/garotafitness/internal/corpus"
 	"github.com/stretchr/testify/require"
 )
@@ -18,7 +19,7 @@ func TestFS25Fg01FirstMember(t *testing.T) {
 	src := corpus.OpenEnv(t, fs25Corpus)
 	vol, err := src.Open("fg-01.bin")
 	require.NoError(t, err)
-	defer vol.Close()
+	test.CloseOnCleanup(t, vol)
 	st, err := vol.Stat()
 	require.NoError(t, err)
 	ra := vol.(interface {
@@ -46,16 +47,10 @@ func TestFS25Fg01FirstMember(t *testing.T) {
 	}
 
 	var r io.Reader = io.NewSectionReader(ra, s.off, int64(s.csz))
-	var closers []io.Closer
-	t.Cleanup(func() {
-		for i := len(closers) - 1; i >= 0; i-- {
-			closers[i].Close()
-		}
-	})
 	for i := len(s.pipe) - 1; i >= 0; i-- {
 		dec, err := Decode(t.Context(), r, s.pipe[i])
 		require.NoError(t, err, s.pipe[i])
-		closers = append(closers, dec)
+		test.CloseOnCleanup(t, dec)
 		r = dec
 	}
 	table := m.crcTable
@@ -74,7 +69,7 @@ func TestFS25Fg01PastFirstStream(t *testing.T) {
 	src := corpus.OpenEnv(t, fs25Corpus)
 	vol, err := src.Open("fg-01.bin")
 	require.NoError(t, err)
-	defer vol.Close()
+	test.CloseOnCleanup(t, vol)
 	st, err := vol.Stat()
 	require.NoError(t, err)
 	ra := vol.(interface {
@@ -93,16 +88,10 @@ func TestFS25Fg01PastFirstStream(t *testing.T) {
 	require.NotNil(t, s)
 
 	var r io.Reader = io.NewSectionReader(ra, s.off, int64(s.csz))
-	var closers []io.Closer
-	t.Cleanup(func() {
-		for i := len(closers) - 1; i >= 0; i-- {
-			closers[i].Close()
-		}
-	})
 	for i := len(s.pipe) - 1; i >= 0; i-- {
 		dec, err := Decode(t.Context(), r, s.pipe[i])
 		require.NoError(t, err, s.pipe[i])
-		closers = append(closers, dec)
+		test.CloseOnCleanup(t, dec)
 		r = dec
 	}
 
@@ -133,7 +122,7 @@ func TestFS25Fg01FlagDePNGMembers(t *testing.T) {
 	src := corpus.OpenEnv(t, fs25Corpus)
 	vol, err := src.Open("fg-01.bin")
 	require.NoError(t, err)
-	defer vol.Close()
+	test.CloseOnCleanup(t, vol)
 	st, err := vol.Stat()
 	require.NoError(t, err)
 	ra := vol.(interface {
@@ -173,7 +162,7 @@ func TestFS25Fg01DecodeUntilFlagDe(t *testing.T) {
 	src := corpus.OpenEnv(t, fs25Corpus)
 	vol, err := src.Open("fg-01.bin")
 	require.NoError(t, err)
-	defer vol.Close()
+	test.CloseOnCleanup(t, vol)
 	st, err := vol.Stat()
 	require.NoError(t, err)
 	ra := vol.(interface {
@@ -191,16 +180,10 @@ func TestFS25Fg01DecodeUntilFlagDe(t *testing.T) {
 	}
 	require.NotNil(t, s)
 	var r io.Reader = io.NewSectionReader(ra, s.off, int64(s.csz))
-	var closers []io.Closer
-	t.Cleanup(func() {
-		for i := len(closers) - 1; i >= 0; i-- {
-			closers[i].Close()
-		}
-	})
 	for i := len(s.pipe) - 1; i >= 0; i-- {
 		dec, err := Decode(t.Context(), r, s.pipe[i])
 		require.NoError(t, err, s.pipe[i])
-		closers = append(closers, dec)
+		test.CloseOnCleanup(t, dec)
 		r = dec
 	}
 	outDir := "/tmp/xt2png-members"
@@ -212,12 +195,8 @@ func TestFS25Fg01DecodeUntilFlagDe(t *testing.T) {
 			dst = &buf
 		}
 		n, err := io.Copy(dst, io.LimitReader(r, int64(m.Size)))
-		if err != nil {
-			t.Fatalf("member[%d] %s size=%d copied=%d: %v", i, m.Path, m.Size, n, err)
-		}
-		if n != int64(m.Size) {
-			t.Fatalf("member[%d] %s short %d want %d", i, m.Path, n, m.Size)
-		}
+		require.NoError(t, err, "member[%d] %s size=%d copied=%d", i, m.Path, m.Size, n)
+		require.Equal(t, int64(m.Size), n, "member[%d] %s", i, m.Path)
 		if i >= 42765 {
 			name := filepath.Base(m.Path)
 			require.NoError(t, os.WriteFile(filepath.Join(outDir, fmt.Sprintf("%05d-%s", i, name)), buf.Bytes(), 0o644))
@@ -227,5 +206,5 @@ func TestFS25Fg01DecodeUntilFlagDe(t *testing.T) {
 			return
 		}
 	}
-	t.Fatal("flag-de.png not reached")
+	require.FailNow(t, "flag-de.png not reached")
 }

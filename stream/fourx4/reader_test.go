@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"io"
 	"testing"
+
+	"github.com/stretchr/testify/require"
 )
 
 func TestParseInner(t *testing.T) {
@@ -22,29 +24,22 @@ func TestParseInner(t *testing.T) {
 	}
 	for _, tc := range cases {
 		name, params, err := parseInner(tc.in)
-		if err != nil {
-			t.Fatalf("%q: %v", tc.in, err)
-		}
-		if name != tc.name || params != tc.params {
-			t.Fatalf("%q: got %q %q want %q %q", tc.in, name, params, tc.name, tc.params)
-		}
+		require.NoError(t, err)
+		require.Equal(t, tc.name, name)
+		require.Equal(t, tc.params, params)
 	}
-	if _, _, err := parseInner(""); err == nil {
-		t.Fatal("want missing inner")
-	}
-	if _, _, err := parseInner("b128mb"); err == nil {
-		t.Fatal("want missing inner")
-	}
+	_, _, err := parseInner("")
+	require.Error(t, err)
+	_, _, err = parseInner("b128mb")
+	require.Error(t, err)
 }
 
 func TestNewReaderNil(t *testing.T) {
 	t.Parallel()
-	if _, err := NewReader(t.Context(), nil, "rzw", ident); err == nil {
-		t.Fatal("want nil reader")
-	}
-	if _, err := NewReader(t.Context(), bytes.NewReader(nil), "rzw", nil); err == nil {
-		t.Fatal("want nil inner")
-	}
+	_, err := NewReader(t.Context(), nil, "rzw", ident)
+	require.Error(t, err)
+	_, err = NewReader(t.Context(), bytes.NewReader(nil), "rzw", nil)
+	require.Error(t, err)
 }
 
 func TestStoredRoundTrip(t *testing.T) {
@@ -57,19 +52,11 @@ func TestStoredRoundTrip(t *testing.T) {
 	}
 	in := frameStored(plain)
 	rd, err := NewReader(t.Context(), bytes.NewReader(in), "b128mb:rzw", inner)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	got, err := io.ReadAll(rd)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if string(got) != string(plain) {
-		t.Fatalf("got %q", got)
-	}
-	if called {
-		t.Fatal("stored block must not call inner")
-	}
+	require.NoError(t, err)
+	require.Equal(t, plain, got)
+	require.False(t, called)
 }
 
 func TestInnerCompressed(t *testing.T) {
@@ -93,19 +80,12 @@ func TestInnerCompressed(t *testing.T) {
 	}
 	in := frameComp(uint32(len(plain)), comp)
 	rd, err := NewReader(t.Context(), bytes.NewReader(in), "b16mb:mpz:q1", inner)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	got, err := io.ReadAll(rd)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if string(got) != string(plain) {
-		t.Fatalf("got %q", got)
-	}
-	if gotName != "mpz" || gotParams != "q1" {
-		t.Fatalf("inner %q %q", gotName, gotParams)
-	}
+	require.NoError(t, err)
+	require.Equal(t, plain, got)
+	require.Equal(t, "mpz", gotName)
+	require.Equal(t, "q1", gotParams)
 }
 
 func TestManyBlocksOrder(t *testing.T) {
@@ -136,49 +116,32 @@ func TestManyBlocksOrder(t *testing.T) {
 		return io.NopCloser(bytes.NewReader(b)), nil
 	}
 	rd, err := NewReader(t.Context(), bytes.NewReader(framed.Bytes()), "t4:rzw", inner)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	got, err := io.ReadAll(rd)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if string(got) != want.String() {
-		t.Fatalf("got %q want %q", got, want.String())
-	}
+	require.NoError(t, err)
+	require.Equal(t, want.String(), string(got))
 }
 
 func TestParseThreads(t *testing.T) {
 	t.Parallel()
-	if n := parseThreads("t4:b8mb:rzw"); n != 4 {
-		t.Fatalf("got %d", n)
-	}
-	if n := parseThreads("rzw"); n < 1 {
-		t.Fatalf("got %d", n)
-	}
+	require.Equal(t, 4, parseThreads("t4:b8mb:rzw"))
+	require.GreaterOrEqual(t, parseThreads("rzw"), 1)
 }
 
 func TestEmptyStream(t *testing.T) {
 	t.Parallel()
 	rd, err := NewReader(t.Context(), bytes.NewReader(nil), "rzw", ident)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	got, err := io.ReadAll(rd)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(got) != 0 {
-		t.Fatalf("got %q", got)
-	}
+	require.NoError(t, err)
+	require.Empty(t, got)
 }
 
 func TestBadVersion(t *testing.T) {
 	t.Parallel()
 	in := []byte{1, 0, 0, 0}
-	if _, err := NewReader(t.Context(), bytes.NewReader(in), "rzw", ident); err == nil {
-		t.Fatal("want version error")
-	}
+	_, err := NewReader(t.Context(), bytes.NewReader(in), "rzw", ident)
+	require.Error(t, err)
 }
 
 func TestInnerError(t *testing.T) {
@@ -188,12 +151,9 @@ func TestInnerError(t *testing.T) {
 	}
 	in := frameComp(4, []byte("xxxx"))
 	rd, err := NewReader(t.Context(), bytes.NewReader(in), "rzw", boom)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := io.ReadAll(rd); err == nil {
-		t.Fatal("want inner error")
-	}
+	require.NoError(t, err)
+	_, err = io.ReadAll(rd)
+	require.Error(t, err)
 }
 
 func ident(_ context.Context, r io.Reader, _, _ string) (io.ReadCloser, error) {

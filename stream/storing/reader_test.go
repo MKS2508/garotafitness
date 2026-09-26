@@ -4,22 +4,17 @@ import (
 	"io"
 	"strings"
 	"testing"
+
+	"github.com/stretchr/testify/require"
 )
 
 func TestNewReader(t *testing.T) {
 	t.Parallel()
 	r, err := NewReader(strings.NewReader("raw"))
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	got, err := io.ReadAll(r)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if string(got) != "raw" {
-		t.Fatalf("got %q", got)
-	}
-	if _, err := NewReader(nil); err == nil {
-		t.Fatal("want nil reader error")
-	}
+	require.NoError(t, err)
+	require.Equal(t, "raw", string(got))
+	_, err = NewReader(nil)
+	require.Error(t, err)
 }
