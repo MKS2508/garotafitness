@@ -82,7 +82,7 @@ func decodeAtom(ctx context.Context, r io.Reader, a Atom) (io.ReadCloser, error)
 	case AlgoRZS:
 		return rzs.NewReader(r)
 	case AlgoMagic2:
-		return magic2.NewReader(r)
+		return magic2.NewReader(ctx, r)
 	case AlgoPref:
 		return pref.NewReader(ctx, r)
 	case AlgoXT3U:

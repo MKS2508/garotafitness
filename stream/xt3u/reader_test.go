@@ -87,7 +87,7 @@ func afterMagic2SREP(t *testing.T) io.Reader {
 	f := corpus.FileEnv(t, "GAROTAFITNESS_CORPUS_SOC", "fg-03.bin")
 	_, err := f.Seek(31, io.SeekStart)
 	require.NoError(t, err)
-	m, err := magic2.NewReader(f)
+	m, err := magic2.NewReader(t.Context(), f)
 	require.NoError(t, err)
 	test.CloseOnCleanup(t, m)
 	s, err := srep.NewReader(t.Context(), m)

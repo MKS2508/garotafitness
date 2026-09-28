@@ -20,17 +20,16 @@ func TestFG06(t *testing.T) {
 	data := make([]byte, 93116)
 	_, err = io.ReadFull(f, data)
 	require.NoError(t, err)
-	r, err := NewReader(bytes.NewReader(data))
+	r, err := NewReader(t.Context(), bytes.NewReader(data))
 	require.NoError(t, err)
 	test.CloseOnCleanup(t, r)
 	plain, err := io.ReadAll(r)
 	require.NoError(t, err)
 	require.Len(t, plain, 430889)
 	got := sha256.Sum256(plain)
-	// Independent reconstruction: all five original archive CRCs match.
 	require.Equal(t, fg06SHA256, hex.EncodeToString(got[:]))
 	for _, n := range []int{9, 14, 51, 55, len(data) - 1} {
-		r, err := NewReader(bytes.NewReader(data[:n]))
+		r, err := NewReader(t.Context(), bytes.NewReader(data[:n]))
 		if err == nil {
 			_, err = io.Copy(io.Discard, r)
 			r.Close()
@@ -39,7 +38,7 @@ func TestFG06(t *testing.T) {
 	}
 	corrupt := bytes.Clone(data)
 	corrupt[55] ^= 0x80
-	r, err = NewReader(bytes.NewReader(corrupt))
+	r, err = NewReader(t.Context(), bytes.NewReader(corrupt))
 	if err == nil {
 		_, err = io.Copy(io.Discard, r)
 		r.Close()
