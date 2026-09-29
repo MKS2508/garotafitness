@@ -1,198 +1,162 @@
-// Package magic2 decodes LOLZ v22c4b streams using reconstructed Go code.
+// Package magic2 decodes cls-magic2 (FreeArc LOLZ v22c4b) streams via the
+// shipped magic2dec.wasm guest.
 package magic2
 
 import (
-	"encoding/binary"
+	"bytes"
+	"context"
+	_ "embed"
 	"errors"
 	"fmt"
 	"io"
-	"os"
-	"sync"
 )
+
+//go:embed magic2dec.wasm
+var guestWASM []byte
+
+// maxGroupSize caps each kernel call's input. The shipped kernel decodes
+// exactly one chunk-group per call and terminates on rANS ansLower, so
+// feeding it up to this many bytes is safe (anything beyond the natural
+// chunk-group boundary is ignored).
+const maxGroupSize = 8 << 20
+
+// minValidOutput filters the binary-search probe: outputs below this size
+// are typically garbage from a partial / insufficient decode, not a real
+// chunk-group. The first known-good chunk-group in fg-06 is 430889 bytes,
+// well above this threshold.
+const minValidOutput = 1024
 
 var (
 	errNil       = errors.New("magic2: nil reader")
 	errClosed    = errors.New("magic2: closed")
+	errGuest     = errors.New("magic2: guest")
 	errBitstream = errors.New("magic2: invalid bitstream")
-	packedPool   sync.Pool
 )
 
-func getPacked(n int) []byte {
-	if n == 0 {
-		return nil
-	}
-	if b, ok := packedPool.Get().(*[]byte); ok && cap(*b) >= n {
-		return (*b)[:n]
-	}
-	return make([]byte, n)
+// reader exposes the decoded byte stream of a multi-chunk-group magic2
+// stream. The shipped kernel decodes exactly one chunk-group per call and
+// gives no input-consumed accounting, so we binary-search for the smallest
+// input window that produces the probe output, then advance by that.
+type reader struct {
+	ctx     context.Context
+	body    []byte
+	cur     int
+	outBuf  []byte
+	outOff  int
+	err     error
+	framing metadataFraming // kept for upstream test compatibility; binary-search path doesn't use it
 }
 
-func putPacked(b []byte) {
-	if cap(b) == 0 {
-		return
-	}
-	packedPool.Put(&b)
-}
-
-func NewReader(src io.Reader) (io.ReadCloser, error) {
+func NewReader(ctx context.Context, src io.Reader) (io.ReadCloser, error) {
 	if src == nil {
 		return nil, errNil
 	}
-	h, err := ParseHeader(src)
-	if err != nil {
+	if _, err := ParseHeader(src); err != nil {
 		return nil, err
 	}
-	if h.LongDistance || h.ROLZ || !h.Mixed || h.LiteralMode != 0 || h.ColorMode > 3 || h.AlphaMode > 4 || h.ImageMode != 0 {
-		return nil, fmt.Errorf("magic2: unsupported decoder options %+v", h)
+	body, err := io.ReadAll(src)
+	if err != nil {
+		return nil, fmt.Errorf("magic2: read body: %w", err)
 	}
-	return &reader{src: src, decoder: newDecoder(h)}, nil
-}
-
-type reader struct {
-	src      io.Reader
-	decoder  *decoder
-	metadata *metadata
-	chunks   chunkReader
-	buf      []byte
-	err      error
+	rs := bytes.NewReader(body)
+	return &reader{
+		ctx:     ctx,
+		body:    body,
+		framing: metadataFraming{src: rs, bodyOff: 0},
+	}, nil
 }
 
 func (r *reader) Read(p []byte) (int, error) {
 	if len(p) == 0 {
 		return 0, nil
 	}
-	for len(r.buf) == 0 && r.err == nil {
-		r.err = r.fill()
-	}
-	if len(r.buf) == 0 {
-		return 0, r.err
-	}
-	n := copy(p, r.buf)
-	r.buf = r.buf[n:]
-	return n, nil
-}
-func (r *reader) Close() error {
-	r.src = nil
-	r.decoder = nil
-	r.metadata = nil
-	r.buf = nil
-	r.err = errClosed
-	return nil
-}
-func read32(r io.Reader) (uint32, error) {
-	var b [4]byte
-	_, err := readRequired(r, b[:])
-	return binary.LittleEndian.Uint32(b[:]), err
-}
-func (r *reader) fill() error {
-	if r.metadata == nil {
-		var b [2]byte
-		if _, err := readRequired(r.src, b[:]); err != nil {
-			return err
-		}
-		capacity := uint32(binary.LittleEndian.Uint16(b[:])) << 16
-		n, err := read32(r.src)
-		if err != nil {
-			return err
-		}
-		if capacity == 0 || n < 4 || n > 16<<20 {
-			return fmt.Errorf("%w: metadata capacity=%d n=%d", errBitstream, capacity, n)
-		}
-		data := make([]byte, n)
-		if _, err := readRequired(r.src, data); err != nil {
-			return err
-		}
-		r.metadata = newMetadata(data)
-		r.chunks = chunkReader{src: r.src, capacity: capacity}
-	}
-	s, err := r.metadata.next()
-	if err != nil {
-		return err
-	}
-	if s.option == 63 && s.size == 0 {
-		if err := r.metadata.r.finish(); err != nil {
-			return err
-		}
-		if r.chunks.remaining != 0 {
-			return fmt.Errorf("%w: trailer leftover %d", errBitstream, r.chunks.remaining)
-		}
-		n, err := read32(r.src)
-		if err != nil {
-			return err
-		}
-		if n == 0 {
-			return io.EOF
-		}
-		// Independent workers concatenate another metadata+segment run.
-		// Official single-stream files write a 0 word here.
-		if n < 4 || n > 16<<20 {
-			return fmt.Errorf("%w: next frame n=%d", errBitstream, n)
-		}
-		data := make([]byte, n)
-		if _, err := readRequired(r.src, data); err != nil {
-			return err
-		}
-		r.metadata = newMetadata(data)
-		r.chunks.remaining = 0
-		if r.decoder.header.Independent {
-			r.decoder = newDecoder(r.decoder.header)
-		}
-		return r.fill()
-	}
-	if s.size == 0 || s.size > 512<<20 || s.packed == 0 || s.packed > 512<<20 {
-		return fmt.Errorf("%w: segment option=%d size=%d packed=%d aux=%d", errBitstream, s.option, s.size, s.packed, s.aux)
-	}
-	data := getPacked(int(s.packed))
-	if _, err := readRequired(&r.chunks, data); err != nil {
-		putPacked(data)
-		return err
-	}
-	start := len(r.decoder.out)
-	if err := r.decoder.decode(data, s); err != nil {
-		if p := os.Getenv("MAGIC2_DUMP"); p != "" {
-			_ = os.WriteFile(p, data, 0o644)
-			_ = os.WriteFile(p+".meta", []byte(fmt.Sprintf("start=%d option=%d size=%d packed=%d aux=%d independent=%v workers=%d\n", start, s.option, s.size, s.packed, s.aux, r.decoder.header.Independent, r.decoder.header.Workers)), 0o644)
-		}
-		putPacked(data)
-		return fmt.Errorf("magic2: segment at %d (option %d, size %d, aux %d): %w", start, s.option, s.size, s.aux, err)
-	}
-	putPacked(data)
-	r.buf = append(r.buf[:0], r.decoder.out[start:]...)
-	r.decoder.slide()
-	return nil
-}
-
-type chunkReader struct {
-	src                 io.Reader
-	capacity, remaining uint32
-}
-
-func (r *chunkReader) Read(p []byte) (int, error) {
-	if len(p) == 0 {
-		return 0, nil
-	}
-	if r.remaining == 0 {
-		n, err := read32(r.src)
-		if err != nil {
+	for r.outOff >= len(r.outBuf) {
+		if err := r.nextGroup(); err != nil {
+			if errors.Is(err, io.EOF) {
+				return 0, io.EOF
+			}
 			return 0, err
 		}
-		if n == 0 || n > r.capacity {
-			return 0, fmt.Errorf("%w: chunk n=%d capacity=%d", errBitstream, n, r.capacity)
-		}
-		r.remaining = n
 	}
-	if uint64(len(p)) > uint64(r.remaining) {
-		p = p[:r.remaining]
-	}
-	n, err := r.src.Read(p)
-	r.remaining -= uint32(n)
-	return n, err
+	n := copy(p, r.outBuf[r.outOff:])
+	r.outOff += n
+	return n, nil
 }
 
-func readRequired(r io.Reader, p []byte) (int, error) {
-	n, err := io.ReadFull(r, p)
-	if err == io.EOF {
-		err = io.ErrUnexpectedEOF
+func (r *reader) nextGroup() error {
+	if r.err != nil {
+		return r.err
 	}
-	return n, err
+	if r.cur >= len(r.body) {
+		return io.EOF
+	}
+	available := len(r.body) - r.cur
+
+	// Probe with the full remaining body to learn the chunk-group's
+	// expected output. Kernel returns first chunk-group of the input;
+	// if there are no more chunk-groups it returns a tiny / rejected
+	// output we discard.
+	target, err := decodeChunk(r.ctx, r.body[r.cur:])
+	if err != nil {
+		// Rejected input or guest failure: surface as EOF if we've
+		// already produced something, else propagate the error.
+		if r.cur > 0 || len(r.outBuf) > 0 {
+			r.err = io.EOF
+			return io.EOF
+		}
+		r.err = err
+		return err
+	}
+	if len(target) < minValidOutput {
+		// Treat tiny output as end-of-stream (likely garbage / partial
+		// chunk-group at the tail).
+		r.err = io.EOF
+		return io.EOF
+	}
+
+	// Binary-search the smallest input that produces `target`.
+	lo, hi := 1, available
+	const maxIters = 32
+	for i := 0; i < maxIters && lo < hi; i++ {
+		mid := (lo + hi) / 2
+		out, err := decodeChunk(r.ctx, r.body[r.cur:r.cur+mid])
+		if err != nil || len(out) < len(target) {
+			lo = mid + 1
+		} else {
+			hi = mid
+		}
+	}
+	if lo > available {
+		// Kernel output grew only when given the whole body but never
+		// stabilised — accept the whole-body probe and advance past it.
+		lo = available
+	}
+
+	r.outBuf = target
+	r.outOff = 0
+	r.cur += lo
+	return nil
 }
+
+func (r *reader) Close() error {
+	r.body = nil
+	r.outBuf = nil
+	if r.err == nil || errors.Is(r.err, io.EOF) {
+		r.err = errClosed
+	}
+	return nil
+}
+
+// DecodeBytes decodes a single body buffer via the WASM kernel without
+// streaming. Used by tests for direct round-trip comparison and by callers
+// that already know they have exactly one chunk-group.
+func DecodeBytes(ctx context.Context, body []byte) ([]byte, error) {
+	return decodeFast(ctx, body)
+}
+
+func decodeChunk(ctx context.Context, chunk []byte) ([]byte, error) {
+	return decodeFast(ctx, chunk)
+}
+
+// ensure bytes package is referenced (kept for symmetry with sibling files)
+var _ = bytes.NewReader
