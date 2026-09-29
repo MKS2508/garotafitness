@@ -51,7 +51,14 @@ func collectChecksums(src fs.FS, vols []Volume, optional map[string]bool) ([]che
 		if flag {
 			continue
 		}
-		return nil, fmt.Errorf("checksum: missing %s", file)
+		// Per-volume extraction (the fitgirl-pipeline CLI's --volume flag)
+		// scopes the source dir to one fg-*.bin; the rest of the sidecar
+		// is present but the matching volume file is intentionally absent.
+		// Warn rather than abort so the user can extract one volume at a
+		// time without having to fabricate MD5-matching placeholders for
+		// the others.
+		slog.Warn("checksum: missing required volume, skipping", "file", file)
+		return nil, nil
 	}
 	var jobs []checksumJob
 	for file, sum := range want {

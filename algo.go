@@ -59,6 +59,7 @@ var algoByName = map[string]Algo{
 	"rzwb":       AlgoRZW,
 	"rzs":        AlgoRZS,
 	"magic2":     AlgoMagic2,
+	"magic2l":    AlgoMagic2,
 	"mpzz":       AlgoMPZZ,
 	"mpz":        AlgoMPZ,
 	"dispack":    AlgoDispack,
