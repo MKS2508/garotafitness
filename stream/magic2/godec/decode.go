@@ -114,6 +114,29 @@ type State struct {
 	// clsMagic2CInit: tracks whether the CDFs above have been seeded.
 	// Reset() seeds them; NewState() seeds them lazily on first call.
 	clsMagic2CInit bool
+
+	// Prev: the last byte emitted by the previous chunk-group. Hoisted
+	// from the local var in decodeChunkGroupCap so the cls11 ROLZ
+	// predictor and the cls dispatch can carry context across chunk-
+	// group boundaries within a solid. The C version keeps this in
+	// the module-scope state; here it lives in *State so a fresh
+	// *State (per solid) starts cleanly with Prev=0.
+	Prev int
+
+	// WinnerCache: the variant (cls11 mode, use_hdr, opt_skip,
+	// force_opt) that hit_crc'd the previous chunk-group within this
+	// solid. Cached across chunk-group calls so DecodeSolid does not
+	// repeat the ~50-variant sweep for every chunk-group — the first
+	// chunk-group discovers the winner, every subsequent one tries
+	// the cache first and falls back to the sweep on miss.
+	//
+	// Fields are zero-valued when WinnerFound is false; reading them
+	// without WinnerFound is undefined.
+	WinnerFound     bool
+	WinnerCls11Mode uint32
+	WinnerUseHdr    int
+	WinnerOptSkip   int
+	WinnerForceOpt  int
 }
 
 // ResetCD seeds the per-stream CDFs (clsTab, off11*, IntModel) to
@@ -156,6 +179,12 @@ func (s *State) ResetCD() {
 	}
 	s.Rep0 = 1
 	s.clsMagic2CInit = true
+	// Solid-scoped working state. NewState allocates a fresh State
+	// per solid, so Prev=0 and WinnerCache cleared is the right start;
+	// ResetCD also re-clears them when a caller explicitly reuses the
+	// same *State for a second solid.
+	s.Prev = 0
+	s.WinnerFound = false
 }
 
 // decodeChunkGroup decodes one chunk-group from body.
@@ -221,10 +250,13 @@ func decodeChunkGroupCap(ctx context.Context, st *State, body []byte, cap uint32
 	st.PcMask = uint8(kPCMaskForOptN[st.OptN])
 
 	out = make([]byte, 0, cap)
-	prev := 0
+	prev := st.Prev // hoisted to *State so it persists across chunk-groups
 
 	for uint32(len(out)) < cap {
 		if err := ctx.Err(); err != nil {
+			if len(out) > 0 {
+				st.Prev = prev
+			}
 			return out, uint32(st.Rans.Off), err
 		}
 		if !st.Rans.OK {
@@ -339,6 +371,7 @@ func decodeChunkGroupCap(ctx context.Context, st *State, body []byte, cap uint32
 	if len(out) == 0 {
 		return nil, uint32(st.Rans.Off), io.EOF
 	}
+	st.Prev = prev
 	return out, uint32(st.Rans.Off), nil
 }
 
@@ -398,6 +431,263 @@ func NewState() *State {
 	var st State
 	st.ROLZ.Reset()
 	return &st
+}
+
+// =====================================================================
+// Solid-level decoder — replaces per-chunk-group caller iteration
+// =====================================================================
+
+// DecodeSolid decodes a full solid body into dst, iterating over every
+// chunk-group internally. State persists across chunk-groups within
+// the solid: cls11 mode, freq-table CDFs, hash chain, ring buffer,
+// esi register, recent offsets, and the previous-byte register all
+// carry forward so chunk N+1 can match against chunk N's literals.
+//
+// body is the solid payload AFTER the FreeArc + magic2 framing
+// prefix (the same slice that would otherwise be passed to
+// Magic2Decode per chunk-group). dst must be large enough to hold
+// the entire decoded payload; the caller sizes it from the framing
+// seg.size field, or allocates a generous buffer (8 MiB+ per chunk).
+//
+// Returns (bytesWritten, bytesConsumed, err):
+//   - bytesWritten is the total decoded payload written to dst
+//   - bytesConsumed is how many bytes of body were consumed
+//     (<= len(body)); the remainder (if any) is trailing data the
+//     caller can discard or feed to the next solid
+//   - err is nil when at least one chunk-group decoded. err is
+//     io.EOF and (0, 0) when the very first chunk-group produces
+//     no output (clean empty input). ctx cancellation surfaces as
+//     ctx.Err() with whatever bytes were emitted so far.
+//
+// Callers decoding multiple solids (one per fg-NN.bin file) MUST
+// allocate a fresh *State per solid via NewState — DecodeSolid does
+// not reset State between calls; the working set is meant to
+// accumulate over the full solid.
+//
+// Per-chunk-group winner cache: the first chunk-group runs the full
+// ~50-variant sweep (Cls11Mode 0..8 × use_hdr 0..12 × ...). The
+// last-tried variant that produced output is recorded in
+// State.WinnerFound / Winner* and tried first on every subsequent
+// chunk-group within the same solid; a miss falls back to the
+// sweep. This avoids repeating the sweep N times for a solid of N
+// chunk-groups (the prior per-call Magic2Decode approach).
+//
+// The boundary detector is per-chunk-group output: the loop runs
+// while the variant sweep returns n > 0. When every variant
+// produces 0 bytes (rANS immediately underruns on the next 4-byte
+// header), the sweep returns 0 and DecodeSolid returns. hit_crc
+// (CRC32-IEEE at offset kEmu, see crc.go) is a stronger signal
+// that the kernel's natural rANS terminator agrees with the C
+// source's chunk-group boundary (main.cpp:770-772); it is not
+// load-bearing for boundary detection.
+func DecodeSolid(ctx context.Context, st *State, body, dst []byte) (int, int, error) {
+	if st == nil || len(dst) == 0 {
+		return 0, 0, io.EOF
+	}
+	if len(body) < 4 {
+		return 0, 0, io.EOF
+	}
+	if !st.clsMagic2CInit {
+		st.ResetCD()
+	}
+
+	n := 0
+	consumed := 0
+	for consumed < len(body) {
+		if err := ctx.Err(); err != nil {
+			return n, consumed, err
+		}
+
+		out, chunkConsumed, produced := decodeChunkGroupSolid(ctx, st, body[consumed:], dst[n:])
+		if !produced {
+			break
+		}
+
+		written := copy(dst[n:], out)
+		n += written
+		consumed += int(chunkConsumed)
+
+		if n >= len(dst) {
+			break
+		}
+	}
+
+	if n == 0 {
+		return 0, 0, io.EOF
+	}
+	return n, consumed, nil
+}
+
+// decodeChunkGroupSolid decodes one chunk-group from body, writing
+// into dst. Tries the cached winner first (State.WinnerFound); if
+// that produces no output OR no cache is present, runs the full
+// variant sweep. On output, records the winning variant config in
+// State for subsequent chunk-groups within the same solid.
+//
+// Returns the chunk-group's bytes, the input bytes consumed, and
+// whether any output was produced (true = chunk-group complete,
+// advance input; false = end of solid, no variant produced bytes).
+func decodeChunkGroupSolid(ctx context.Context, st *State, body, dst []byte) (out []byte, consumed uint32, produced bool) {
+	if len(body) < 4 || len(dst) == 0 {
+		return nil, 0, false
+	}
+
+	// Try cached winner first — saves the full sweep on subsequent
+	// chunk-groups within the same solid.
+	if st.WinnerFound {
+		st.Cls11Mode = st.WinnerCls11Mode
+		n, _ := tryV22Cached(ctx, st, body, dst, st.WinnerUseHdr, st.WinnerOptSkip, st.WinnerForceOpt)
+		if n > 0 {
+			// Cache hit — output produced. hit_crc only confirms
+			// the kernel boundary; the chunk-group is complete
+			// either way.
+			return append([]byte(nil), dst[:n]...), uint32(st.Rans.Off), true
+		}
+		// Cached winner missed on this chunk-group — fall back to
+		// the sweep and clear the cache so we re-discover.
+		st.WinnerFound = false
+		st.Cls11Mode = 0
+	}
+
+	// Full sweep. magic2DecodeSweepSaveWinner mirrors Magic2Decode's
+	// iteration but reports the winning variant's (use_hdr, opt_skip,
+	// force_opt) tuple so we can cache it.
+	n, useHdr, optSkip, forceOpt, produced := magic2DecodeSweepSaveWinner(ctx, st, body, dst)
+	if !produced {
+		return nil, 0, false
+	}
+
+	st.WinnerFound = true
+	st.WinnerCls11Mode = st.Cls11Mode
+	st.WinnerUseHdr = useHdr
+	st.WinnerOptSkip = optSkip
+	st.WinnerForceOpt = forceOpt
+
+	return append([]byte(nil), dst[:n]...), uint32(st.Rans.Off), true
+}
+
+// magic2DecodeSweepSaveWinner iterates the ~50 decode_v22 variants
+// and returns the winning variant's params (use_hdr, opt_skip,
+// force_opt) plus the bytes emitted.
+//
+// The iteration order matches Magic2Decode below — reordering
+// changes which config wins on the first hit for any given
+// (body, dst) pair. The C source commits to the order; the Go port
+// follows it.
+//
+// The boolean return is "produced any output" (n > 0), NOT
+// hit_crc-fired. A sweep that goes through every variant without
+// hit_crc still returns the last variant's bytes (mirrors
+// Magic2Decode's `return decode_v22(...);` fallback at
+// main.cpp:1671). n == 0 means every variant returned 0 bytes —
+// the natural end-of-solid signal (rANS immediately underruns on
+// the next 4-byte chunk header).
+func magic2DecodeSweepSaveWinner(ctx context.Context, st *State, body, dst []byte) (n, useHdr, optSkip, forceOpt int, produced bool) {
+	if len(body) < 4 {
+		return 0, 0, 0, 0, false
+	}
+	opt := peekOpt(body)
+
+	tryV22 := func(useSecond, uH, oS, fO int) (int, bool) {
+		if err := ctx.Err(); err != nil {
+			return 0, false
+		}
+		out, err := DecodeV22Cap(ctx, st, body, useSecond, uH, oS, fO, uint32(len(dst)))
+		if err != nil || len(out) == 0 {
+			return 0, false
+		}
+		nn := copy(dst, out)
+		return nn, hitCRC(dst, nn)
+	}
+
+	// Block 1: special-case + FreeArc-header early-out.
+	st.Cls11Mode = 0
+	if n, h := tryV22(1, 12, 0, opt); h {
+		return n, 12, 0, opt, true
+	} else if n >= 4 && (dst[0] == '[' || dst[0] == ';') {
+		return n, 12, 0, opt, true
+	}
+
+	// Block 2: cls11 mode loop over use_hdr ∈ {3,4,5}.
+	for m := uint32(0); m < 9; m++ {
+		st.Cls11Mode = m
+		if n, h := tryV22(1, 3, 0, opt); h {
+			return n, 3, 0, opt, true
+		}
+		if n, h := tryV22(1, 4, 0, opt); h {
+			return n, 4, 0, opt, true
+		}
+		if n, h := tryV22(1, 5, 0, opt); h {
+			return n, 5, 0, opt, true
+		}
+	}
+
+	// Block 3: extended use_hdr sweep with Cls11Mode=0.
+	st.Cls11Mode = 0
+	for _, uH := range []int{3, 4, 5, 6, 7, 8, 9, 10, 11} {
+		if n, h := tryV22(1, uH, 0, opt); h {
+			return n, uH, 0, opt, true
+		}
+	}
+
+	// Block 4: cls11 mode loop over use_hdr=0.
+	for m := uint32(0); m < 9; m++ {
+		st.Cls11Mode = m
+		if n, h := tryV22(1, 0, 0, opt); h {
+			return n, 0, 0, opt, true
+		}
+	}
+
+	// Block 5: trailing variants with Cls11Mode=0.
+	st.Cls11Mode = 0
+	if n, h := tryV22(1, 0, 0, -1); h {
+		return n, 0, 0, -1, true
+	}
+	if n, h := tryV22(1, 0, kOptSkip, opt); h {
+		return n, 0, kOptSkip, opt, true
+	}
+	if n, h := tryV22(0, 0, 0, opt); h {
+		return n, 0, 0, opt, true
+	}
+	if n, h := tryV22(1, 1, 0, opt); h {
+		return n, 1, 0, opt, true
+	}
+	if n, h := tryV22(1, 2, 0, opt); h {
+		return n, 2, 0, opt, true
+	}
+	if n, h := tryV22(0, 1, 0, opt); h {
+		return n, 1, 0, opt, true
+	}
+
+	// Final fallback — mirrors Magic2Decode's `return decode_v22(...);`.
+	// Returns the last variant's bytes regardless of hit_crc (the C
+	// kernel does the same). If this returns 0, every variant
+	// returned 0 → end of solid.
+	n, _ = tryV22(1, 12, 0, opt)
+	if n > 0 {
+		return n, 12, 0, opt, true
+	}
+	return 0, 0, 0, 0, false
+}
+
+// tryV22Cached runs a single decode_v22 variant using the cached
+// winner config. Returns (n, hitCRC) — n is bytes copied into dst,
+// hitCRC is whether hit_crc fired. The caller treats n > 0 as a
+// successful chunk-group; hitCRC is informational (it confirms the
+// chunk-group boundary matches the kernel's view).
+func tryV22Cached(ctx context.Context, st *State, body, dst []byte, useHdr, optSkip, forceOpt int) (int, bool) {
+	if err := ctx.Err(); err != nil {
+		return 0, false
+	}
+	if len(body) < 4 {
+		return 0, false
+	}
+	out, err := DecodeV22Cap(ctx, st, body, 1, useHdr, optSkip, forceOpt, uint32(len(dst)))
+	if err != nil || len(out) == 0 {
+		return 0, false
+	}
+	n := copy(dst, out)
+	return n, hitCRC(dst, n)
 }
 
 // DecodeV22 is the per-chunk-group magic2 rANS+LZ decoder. It mirrors

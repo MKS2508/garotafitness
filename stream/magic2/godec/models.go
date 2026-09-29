@@ -276,6 +276,67 @@ func (r *Rans) DecodeNewOff(a, b []uint16, wp *uint16, esc, bp []uint16, nbtab [
 	return d + 2*s3 + bit
 }
 
+// DecodeOptInt is the option-header integer decoder. Mirrors
+// main.cpp:895-924 (decode_opt_int). flag=1 skips the presence-bit
+// path (always decode the integer); flag=0 reads the presence bit
+// first and returns 0 if it is zero. Returns the decoded integer
+// value (>= 0) or -1 on rANS underrun.
+//
+// The bit-offset arithmetic (`s * 64 + rdx`) can exceed kExtraBits for
+// max-h envelope (s=15, rdx=63 → 1023). Callers must size the bits
+// array to at least kExtraBits entries. Main.cpp declares it as
+// kExtraBits=2048 which covers the full envelope.
+func (r *Rans) DecodeOptInt(A *ExtraModel, skipFirst int) int {
+	if !r.OK {
+		return -1
+	}
+	if skipFirst == 0 {
+		idx := int(A.Ctx8) & 15
+		bit := r.GetBit(&A.P0[idx], 15, 4)
+		if bit < 0 {
+			return -1
+		}
+		A.Ctx8 = uint8((bit + 2*int(A.Ctx8)) & 3)
+		if bit == 0 {
+			return 0
+		}
+	}
+	ctx := int(A.CtxA)
+	if ctx > 15 {
+		ctx = 15
+	}
+	s := r.GetNibble(A.CDF[ctx][:], 16, 5, kHdrTgt)
+	if s < 0 {
+		return -1
+	}
+	if s == 15 {
+		sx := r.GetNibble(A.Esc[ctx][:], 16, 5, kHdrTgt)
+		if sx < 0 {
+			return -1
+		}
+		s = 15 + sx
+	}
+	A.CtxA = uint8(s + 1)
+	eax := 1
+	rdx := 1
+	for i := 0; i < s; i++ {
+		off := s*64 + rdx
+		if off < 0 {
+			off = 0
+		}
+		if off >= kExtraBits {
+			off = kExtraBits - 1
+		}
+		b := r.GetBit(&A.Bits[off], 15, 4)
+		if b < 0 {
+			return -1
+		}
+		rdx = (b + 2*rdx) & 0x3f
+		eax = b + 2*eax
+	}
+	return eax
+}
+
 // DecodeOff selects the recent-offset slot for a match class and
 // rotates reps[] so the selected slot becomes the new [0]. Returns
 // the new distance. Mirrors main.cpp:742-768 (decode_off).

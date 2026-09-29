@@ -1,5 +1,8 @@
-// Package magic2 decodes cls-magic2 (FreeArc LOLZ v22c4b) streams via the
-// shipped magic2dec.wasm guest.
+// Package magic2 decodes cls-magic2 (FreeArc LOLZ v22c4b) streams.
+// The streaming reader uses the pure-Go godec package as the primary
+// decode path and falls back to the shipped magic2dec.wasm kernel
+// when godec produces no output (e.g. simplified classifier missing
+// a real cls=11 / hit_crc match on a stub corpus).
 package magic2
 
 import (
@@ -9,6 +12,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+
+	"github.com/lucasew/garotafitness/stream/magic2/godec"
 )
 
 //go:embed magic2dec.wasm
@@ -26,6 +31,14 @@ const maxGroupSize = 8 << 20
 // well above this threshold.
 const minValidOutput = 1024
 
+// solidDstCap is the dst capacity handed to godec.DecodeSolid per
+// streaming Read. One solid's decoded output can run into the
+// hundreds of MiB (fg-01 is ~33 GiB); we allocate a generous 8 MiB
+// scratch and let DecodeSolid fill it as much as fits, then loop.
+// Per-call caps this is the streaming reader's cost — the WASM
+// kernel uses the same cap shape.
+const solidDstCap = 8 << 20
+
 var (
 	errNil       = errors.New("magic2: nil reader")
 	errClosed    = errors.New("magic2: closed")
@@ -34,31 +47,23 @@ var (
 )
 
 // reader exposes the decoded byte stream of a multi-chunk-group magic2
-// stream. Boundary detection follows the cls-magic2 algorithm (RE of
-// FUN_140037790, FUN_14003afc0, FUN_140028a40):
-//
-//   - FUN_14003afc0 parses the per-chunk-group metadata block and decodes the
-//     rANS-encoded `local_7c` (chunk_group_uncompressed_size) into model
-//     state. FUN_140028a40 then calls FUN_140037790 with that as param_2.
-//   - FUN_140037790's loop decrements `local_c0` (= param_2) by
-//     bytes_decoded each chunk-group iteration and returns when it hits 0,
-//     producing exactly param_2 bytes per chunk-group. The host tracks the
-//     input position via param_1[0x1e] (= bytes consumed, byte-aligned per
-//     symbol).
-//
-// The shipped WASM exposes that count as magic2_get_input_consumed so the
-// streaming reader advances r.cur by exactly the kernel-reported offset
-// instead of bisecting. If the export is missing or returns 0 (older guest,
-// CRC-fallback path that re-decodes the whole buffer), we fall back to the
-// binary-search probe — same contract as before, just slower.
+// stream. The primary decode path is godec.DecodeSolid — it iterates
+// chunk-groups internally with state persisting across them, which
+// restores the cls11 mode + freq-table + hash-chain history the prior
+// per-chunk-group caller pattern was losing. WASM kernel fallback
+// remains for cases where godec produces no output (stub corpus,
+// simplified classifier, real magic2 hits that the port doesn't yet
+// model).
 type reader struct {
-	ctx     context.Context
-	body    []byte
-	cur     int
-	outBuf  []byte
-	outOff  int
-	err     error
-	framing metadataFraming
+	ctx  context.Context
+	body []byte
+	cur  int
+	st   *godec.State // per-solid godec state; persists across nextGroup() calls
+	dst  []byte      // scratch for godec.DecodeSolid output
+
+	outBuf []byte
+	outOff int
+	err    error
 }
 
 func NewReader(ctx context.Context, src io.Reader) (io.ReadCloser, error) {
@@ -72,11 +77,11 @@ func NewReader(ctx context.Context, src io.Reader) (io.ReadCloser, error) {
 	if err != nil {
 		return nil, fmt.Errorf("magic2: read body: %w", err)
 	}
-	rs := bytes.NewReader(body)
 	return &reader{
-		ctx:     ctx,
-		body:    body,
-		framing: metadataFraming{src: rs, bodyOff: 0},
+		ctx:  ctx,
+		body: body,
+		st:   godec.NewState(),
+		dst:  make([]byte, solidDstCap),
 	}, nil
 }
 
@@ -97,21 +102,14 @@ func (r *reader) Read(p []byte) (int, error) {
 	return n, nil
 }
 
-// nextGroup decodes the next chunk-group into r.outBuf and advances r.cur.
-// Strategy:
-//  1. Framing-driven (cls-magic2 algorithm): ask the framing oracle for the
-//     next chunk-group's [start, end) in body coordinates and its declared
-//     uncompressed output size (seg.size = param_2 in FUN_140037790). One
-//     kernel call with body[start:end] — if the output matches the declared
-//     size, accept it and advance to end.
-//  2. Direct kernel probe with the kernel-reported input-consumed count:
-//     one kernel call on the remaining body, then advance r.cur by exactly
-//     the bytes the kernel actually read. Used when framing fails (EOF,
-//     corrupt metadata, missing chunk header) and the shipped guest exposes
-//     magic2_get_input_consumed.
-//  3. Binary-search fallback: same shape as before — used when the export
-//     is missing or returned 0 (e.g. CRC-fallback re-decode of the whole
-//     body). Identical probe semantics to the previous implementation.
+// nextGroup decodes the next batch of bytes from the solid and
+// advances r.cur. Primary path is godec.DecodeSolid (one call iterates
+// chunk-groups internally, returning decoded bytes + consumed input).
+// Fallback path is the WASM kernel — used when godec produces no
+// output (real magic2 streams the simplified classifier hasn't been
+// taught yet). On a fallback hit the kernel's reported consumed
+// count advances r.cur; without it, the binary-search probe keeps
+// the old contract.
 func (r *reader) nextGroup() error {
 	if r.err != nil {
 		return r.err
@@ -120,64 +118,52 @@ func (r *reader) nextGroup() error {
 		return io.EOF
 	}
 
-	// --- Path 1: framing-driven (cls-magic2 chunk-group algorithm) ---
-	start, end, expectedOut, ferr := r.framing.Next(int64(r.cur), int64(len(r.body)))
-	if ferr == nil && end > start {
-		out, consumed, derr := decodeFastWithConsumed(r.ctx, r.body[start:end])
-		if derr == nil && len(out) > 0 && (expectedOut <= 0 || int64(len(out)) == expectedOut) {
-			r.outBuf = out
-			r.outOff = 0
-			_ = consumed // framing already pinned end; kernel agrees
-			r.cur = int(end)
-			return nil
-		}
-		// Decode failed or output mismatched the declared size: treat as if
-		// framing was correct but the kernel disagrees. Fall through to the
-		// consumed/probe path so we don't strand the stream at r.cur.
-	}
-
-	// --- Path 2: single-call with kernel-reported consumption ---
-	probeOut, consumed, err := decodeFastWithConsumed(r.ctx, r.body[r.cur:])
-	if err == nil && consumed > 0 && len(probeOut) >= minValidOutput {
-		r.outBuf = probeOut
+	// --- Path 1: godec.DecodeSolid (pure-Go, primary) ---
+	n, consumed, err := godec.DecodeSolid(r.ctx, r.st, r.body[r.cur:], r.dst)
+	if err == nil && n > 0 && consumed > 0 {
+		// Append-style copy into a fresh slice sized to n. We do
+		// not reuse r.dst across calls because the next call's
+		// DecodeSolid would overwrite it.
+		out := make([]byte, n)
+		copy(out, r.dst[:n])
+		r.outBuf = out
 		r.outOff = 0
-		r.cur += int(consumed)
+		r.cur += consumed
 		return nil
 	}
-	// Stash for the binary-search path: a usable probe without a
-	// consumption count, or a kernel error that we'll surface as EOF.
-	bsProbe := probeOut
-	bsErr := err
 
-	// --- Path 3: binary-search fallback ---
-	if bsErr != nil {
-		// Rejected input or guest failure: surface as EOF if we've
-		// already produced something, else propagate the error.
+	// --- Path 2: WASM kernel fallback ---
+	// godec produced no output (or context cancelled). Try the
+	// shipped kernel; if it succeeds we accept the result and
+	// don't strand r.cur. The kernel's per-call consumed count
+	// is the new advance signal.
+	probeOut, kConsumed, kerr := decodeFastWithConsumed(r.ctx, r.body[r.cur:])
+	if kerr == nil && kConsumed > 0 && len(probeOut) >= minValidOutput {
+		r.outBuf = probeOut
+		r.outOff = 0
+		r.cur += int(kConsumed)
+		return nil
+	}
+	if kerr != nil {
 		if r.cur > 0 || len(r.outBuf) > 0 {
 			r.err = io.EOF
 			return io.EOF
 		}
-		r.err = bsErr
-		return bsErr
+		r.err = kerr
+		return kerr
 	}
-	if len(bsProbe) < minValidOutput {
-		// Treat tiny output as end-of-stream (likely garbage / partial
-		// chunk-group at the tail).
+
+	// --- Path 3: binary-search fallback (kernel probe only) ---
+	if len(probeOut) < minValidOutput {
 		r.err = io.EOF
 		return io.EOF
 	}
-
-	probeOut = bsProbe
 	available := len(r.body) - r.cur
 	lo, hi := 1, available
 	const maxIters = 32
 	for i := 0; i < maxIters && lo < hi; i++ {
 		mid := (lo + hi) / 2
 		out, err := decodeChunk(r.ctx, r.body[r.cur:r.cur+mid])
-		// Termination oracle: when the kernel has the full chunk-group in
-		// its input window, it produces exactly len(probeOut) bytes. If it
-		// returns fewer, the window is too small. If it returns the same or
-		// more, the window covers (at least) one chunk-group.
 		if err != nil || len(out) < len(probeOut) {
 			lo = mid + 1
 		} else {
@@ -185,11 +171,8 @@ func (r *reader) nextGroup() error {
 		}
 	}
 	if lo > available {
-		// Kernel output grew only when given the whole body but never
-		// stabilised — accept the whole-body probe and advance past it.
 		lo = available
 	}
-
 	r.outBuf = probeOut
 	r.outOff = 0
 	r.cur += lo
@@ -199,6 +182,8 @@ func (r *reader) nextGroup() error {
 func (r *reader) Close() error {
 	r.body = nil
 	r.outBuf = nil
+	r.dst = nil
+	r.st = nil
 	if r.err == nil || errors.Is(r.err, io.EOF) {
 		r.err = errClosed
 	}
