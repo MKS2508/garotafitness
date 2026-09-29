@@ -19,6 +19,13 @@
 //
 // On FitGirl each frame carries exactly one chunk-group, so we deliver one
 // body range per Next() call.
+//
+// Chunk-group termination (per RE of cls-magic2 FUN_140037790 / param_2):
+// the chunk driver decrements `local_c0` by bytes_decoded and returns when
+// it hits 0, producing exactly chunk_group_uncompressed_size bytes. The
+// framing metadata carries that size as `seg.size` (returned as the 3rd
+// value of Next), which is the oracle the streaming reader uses to skip
+// binary-searching the kernel.
 package magic2
 
 import (
@@ -35,27 +42,33 @@ type metadataFraming struct {
 	bodyOff int64
 }
 
-// Next reads from `from` and returns (start, end) of the first chunk-group body.
-// EOF when the stream is exhausted.
-func (f metadataFraming) Next(from, total int64) (int64, int64, error) {
+// Next reads from `from` and returns (start, end, expectedOut, err) of the
+// first chunk-group body. expectedOut is the uncompressed output size the
+// kernel will produce (seg.size from the metadata); it is the cls-magic2
+// termination oracle (param_2 in FUN_140037790 — `local_c0` decrements to
+// 0 after exactly that many bytes are decoded).
+//
+// EOF when the stream is exhausted. Non-EOF errors are bitstream corruption
+// and the streaming reader should fall back to binary-search.
+func (f metadataFraming) Next(from, total int64) (start, end, expectedOut int64, err error) {
 	if from < 0 || total < 0 {
-		return 0, 0, fmt.Errorf("magic2: framing cursor %d total %d", from, total)
+		return 0, 0, 0, fmt.Errorf("magic2: framing cursor %d total %d", from, total)
 	}
 	if from >= total {
-		return 0, 0, io.EOF
+		return 0, 0, 0, io.EOF
 	}
 
 	// Frame header: 2 bytes capacity_hint + 4 bytes metadata_size.
 	if total-from < 6 {
-		return 0, 0, io.EOF
+		return 0, 0, 0, io.EOF
 	}
 	var hdr [6]byte
 	sec := io.NewSectionReader(f.src, f.bodyOff+from, 6)
 	if _, err := io.ReadFull(sec, hdr[:]); err != nil {
 		if errors.Is(err, io.EOF) {
-			return 0, 0, io.EOF
+			return 0, 0, 0, io.EOF
 		}
-		return 0, 0, fmt.Errorf("magic2: read frame header at %d: %w", from, err)
+		return 0, 0, 0, fmt.Errorf("magic2: read frame header at %d: %w", from, err)
 	}
 	capacity := binary.LittleEndian.Uint16(hdr[0:2])
 	metaSize := binary.LittleEndian.Uint32(hdr[2:6])
@@ -64,37 +77,37 @@ func (f metadataFraming) Next(from, total int64) (int64, int64, error) {
 	// which itself can be zero or the last capacity from the previous frame).
 	// Detect EOF: if the 6-byte header reads as either all zeros, or metadata_size==0.
 	if metaSize == 0 {
-		return 0, 0, io.EOF
+		return 0, 0, 0, io.EOF
 	}
 	if metaSize < 4 || int64(metaSize) > total-from-6 || metaSize > 1<<24 {
-		return 0, 0, fmt.Errorf("%w: metadata size=%d (capacity=%d) at %d", errBitstream, metaSize, capacity, from)
+		return 0, 0, 0, fmt.Errorf("%w: metadata size=%d (capacity=%d) at %d", errBitstream, metaSize, capacity, from)
 	}
 
 	// Read metadata block (rANS state + segment options).
 	metaBuf := make([]byte, metaSize)
 	sec = io.NewSectionReader(f.src, f.bodyOff+from+6, int64(metaSize))
 	if _, err := io.ReadFull(sec, metaBuf); err != nil {
-		return 0, 0, fmt.Errorf("magic2: read metadata at %d: %w", from, err)
+		return 0, 0, 0, fmt.Errorf("magic2: read metadata at %d: %w", from, err)
 	}
 	meta := newMetadata(metaBuf)
 	seg, err := meta.next()
 	if err != nil {
-		return 0, 0, fmt.Errorf("magic2: parse metadata at %d: %w", from, err)
+		return 0, 0, 0, fmt.Errorf("magic2: parse metadata at %d: %w", from, err)
 	}
 	if seg.packed == 0 {
-		return 0, 0, fmt.Errorf("%w: zero-size chunk-group at %d", errBitstream, from)
+		return 0, 0, 0, fmt.Errorf("%w: zero-size chunk-group at %d", errBitstream, from)
 	}
 
 	// Position now: end of metadata block. Next comes the chunk-group body
 	// prefixed by its own 4-byte LE chunk_size.
 	bodyStartInFrame := int64(6) + int64(metaSize)
 	if total-from < bodyStartInFrame+4 {
-		return 0, 0, fmt.Errorf("%w: chunk-size missing after metadata at %d", errBitstream, from)
+		return 0, 0, 0, fmt.Errorf("%w: chunk-size missing after metadata at %d", errBitstream, from)
 	}
 	var chunkHdr [4]byte
 	sec = io.NewSectionReader(f.src, f.bodyOff+from+bodyStartInFrame, 4)
 	if _, err := io.ReadFull(sec, chunkHdr[:]); err != nil {
-		return 0, 0, fmt.Errorf("magic2: read chunk-size at %d: %w", from, err)
+		return 0, 0, 0, fmt.Errorf("magic2: read chunk-size at %d: %w", from, err)
 	}
 	chunkSize := binary.LittleEndian.Uint32(chunkHdr[:])
 	if chunkSize == 0 || int64(chunkSize) > int64(seg.packed)+64 || int64(chunkSize) < int64(seg.packed)-64 {
@@ -103,10 +116,10 @@ func (f metadataFraming) Next(from, total int64) (int64, int64, error) {
 		chunkSize = seg.packed
 	}
 
-	start := from + bodyStartInFrame + 4
-	end := start + int64(chunkSize)
+	start = from + bodyStartInFrame + 4
+	end = start + int64(chunkSize)
 	if end > total {
-		return 0, 0, fmt.Errorf("%w: chunk-group [%d,%d) exceeds body %d", errBitstream, start, end, total)
+		return 0, 0, 0, fmt.Errorf("%w: chunk-group [%d,%d) exceeds body %d", errBitstream, start, end, total)
 	}
-	return start, end, nil
+	return start, end, int64(seg.size), nil
 }

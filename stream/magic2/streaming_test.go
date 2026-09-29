@@ -64,7 +64,7 @@ func TestStreamingBoundedMemory(t *testing.T) {
 	defer r.Close()
 
 	rd := r.(*reader)
-	start, end, err := rd.framing.Next(0, int64(total))
+	start, end, _, err := rd.framing.Next(0, int64(total))
 	require.NoError(t, err)
 	require.LessOrEqual(t, end-start, int64(maxGroupSize),
 		"first window must be bounded by maxGroupSize")

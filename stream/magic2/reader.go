@@ -34,9 +34,25 @@ var (
 )
 
 // reader exposes the decoded byte stream of a multi-chunk-group magic2
-// stream. The shipped kernel decodes exactly one chunk-group per call and
-// gives no input-consumed accounting, so we binary-search for the smallest
-// input window that produces the probe output, then advance by that.
+// stream. Boundary detection follows the cls-magic2 algorithm (RE of
+// FUN_140037790, FUN_14003afc0, FUN_140028a40):
+//
+//   - FUN_14003afc0 parses the per-chunk-group metadata block and decodes the
+//     rANS-encoded `local_7c` (chunk_group_uncompressed_size) into model
+//     state. FUN_140028a40 then calls FUN_140037790 with that as param_2.
+//   - FUN_140037790's loop decrements `local_c0` (= param_2) by
+//     bytes_decoded each chunk-group iteration and returns when it hits 0,
+//     producing exactly param_2 bytes per chunk-group. The host tracks the
+//     input position via param_1[0x1e] (= bytes consumed, byte-aligned per
+//     symbol), but the shipped C kernel does not expose that.
+//
+// Since the C kernel returns only bytes_written (no input_consumed), we
+// read seg.size from the framing metadata and make a single kernel call per
+// chunk-group, bypassing the binary search that cls-magic2 sidesteps by
+// tracking param_1[0x1e] in-register. If framing fails (non-FitGirl producer,
+// corrupt metadata, truncated body), we fall back to probing with the full
+// remaining body and bisecting for the smallest input that reproduces the
+// probe output.
 type reader struct {
 	ctx     context.Context
 	body    []byte
@@ -44,7 +60,7 @@ type reader struct {
 	outBuf  []byte
 	outOff  int
 	err     error
-	framing metadataFraming // kept for upstream test compatibility; binary-search path doesn't use it
+	framing metadataFraming
 }
 
 func NewReader(ctx context.Context, src io.Reader) (io.ReadCloser, error) {
@@ -83,6 +99,16 @@ func (r *reader) Read(p []byte) (int, error) {
 	return n, nil
 }
 
+// nextGroup decodes the next chunk-group into r.outBuf and advances r.cur.
+// Strategy:
+//  1. Framing-driven (cls-magic2 algorithm): ask the framing oracle for the
+//     next chunk-group's [start, end) in body coordinates and its declared
+//     uncompressed output size (seg.size = param_2 in FUN_140037790). One
+//     kernel call with body[start:end] — if the output matches the declared
+//     size, accept it and advance to end.
+//  2. Fallback: probe with the full remaining body to learn the expected
+//     output size, then bisect for the smallest input that reproduces it.
+//     Used when framing fails (EOF, corrupt metadata, missing chunk header).
 func (r *reader) nextGroup() error {
 	if r.err != nil {
 		return r.err
@@ -90,13 +116,24 @@ func (r *reader) nextGroup() error {
 	if r.cur >= len(r.body) {
 		return io.EOF
 	}
-	available := len(r.body) - r.cur
 
-	// Probe with the full remaining body to learn the chunk-group's
-	// expected output. Kernel returns first chunk-group of the input;
-	// if there are no more chunk-groups it returns a tiny / rejected
-	// output we discard.
-	target, err := decodeChunk(r.ctx, r.body[r.cur:])
+	// --- Path 1: framing-driven (cls-magic2 chunk-group algorithm) ---
+	start, end, expectedOut, ferr := r.framing.Next(int64(r.cur), int64(len(r.body)))
+	if ferr == nil && end > start {
+		if out, derr := decodeChunk(r.ctx, r.body[start:end]); derr == nil && len(out) > 0 &&
+			(expectedOut <= 0 || int64(len(out)) == expectedOut) {
+			r.outBuf = out
+			r.outOff = 0
+			r.cur = int(end)
+			return nil
+		}
+		// Decode failed or output mismatched the declared size: treat as if
+		// framing was correct but the kernel disagrees. Fall through to the
+		// binary-search path so we don't strand the stream at r.cur.
+	}
+
+	// --- Path 2: binary-search fallback ---
+	probeOut, err := decodeChunk(r.ctx, r.body[r.cur:])
 	if err != nil {
 		// Rejected input or guest failure: surface as EOF if we've
 		// already produced something, else propagate the error.
@@ -107,20 +144,24 @@ func (r *reader) nextGroup() error {
 		r.err = err
 		return err
 	}
-	if len(target) < minValidOutput {
+	if len(probeOut) < minValidOutput {
 		// Treat tiny output as end-of-stream (likely garbage / partial
 		// chunk-group at the tail).
 		r.err = io.EOF
 		return io.EOF
 	}
 
-	// Binary-search the smallest input that produces `target`.
+	available := len(r.body) - r.cur
 	lo, hi := 1, available
 	const maxIters = 32
 	for i := 0; i < maxIters && lo < hi; i++ {
 		mid := (lo + hi) / 2
 		out, err := decodeChunk(r.ctx, r.body[r.cur:r.cur+mid])
-		if err != nil || len(out) < len(target) {
+		// Termination oracle: when the kernel has the full chunk-group in
+		// its input window, it produces exactly len(probeOut) bytes. If it
+		// returns fewer, the window is too small. If it returns the same or
+		// more, the window covers (at least) one chunk-group.
+		if err != nil || len(out) < len(probeOut) {
 			lo = mid + 1
 		} else {
 			hi = mid
@@ -132,7 +173,7 @@ func (r *reader) nextGroup() error {
 		lo = available
 	}
 
-	r.outBuf = target
+	r.outBuf = probeOut
 	r.outOff = 0
 	r.cur += lo
 	return nil
