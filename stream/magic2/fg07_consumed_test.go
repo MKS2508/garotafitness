@@ -18,7 +18,6 @@ import (
 	"testing"
 
 	"github.com/lucasew/garotafitness/internal/corpus"
-	"github.com/lucasew/garotafitness/stream/magic2/godec"
 	"github.com/stretchr/testify/require"
 )
 
@@ -51,7 +50,7 @@ func TestFG07InputConsumed(t *testing.T) {
 	// Strip the magic2 header (the kernel reads from byte 0 of its input)
 	// so the same call shape the reader makes on the consumed path.
 	body := preamble[magic2HdrLen:]
-	out, consumed, derr := decodeFastWithConsumed(context.Background(), godec.NewState(), body)
+	out, consumed, derr := decodeFastWithConsumed(context.Background(), body)
 	require.NoError(t, derr, "direct kernel call on fg-07 body failed")
 	require.GreaterOrEqual(t, len(out), fg07MinBytes,
 		"direct decode too small: %d bytes", len(out))
