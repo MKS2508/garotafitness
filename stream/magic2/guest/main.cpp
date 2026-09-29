@@ -605,6 +605,10 @@ static const int kRolzCap = 2048;
 static int gCls11Mode = 0;
 static uint32_t gRolz[256][2048];
 static int gRolzCur[256];
+// Bytes of input consumed by the last magic2_decode call (opt_skip + r.off on
+// the accepting decode_v22 path). The host reads this between calls so the
+// streaming reader can advance r.cur without bisecting.
+static int gLastConsumed = 0;
 
 static void rolz_reset(void) {
   memset(gRolz, 0, sizeof(gRolz));
@@ -972,7 +976,10 @@ static int fcm_r10(Rans *r, Hist *h, uint16_t *grid, uint16_t *bits) {
 static int decode_v22(const uint8_t *src, int slen, uint8_t *dst, int dcap, int use_second, int use_hdr, int opt_skip = 0,
                       int force_opt = -1) {
   if (opt_skip < 0) opt_skip = 0;
-  if (slen < opt_skip + 4) return 0;
+  if (slen < opt_skip + 4) {
+    gLastConsumed = 0;
+    return 0;
+  }
   src += opt_skip;
   slen -= opt_skip;
   Rans r;
@@ -987,7 +994,10 @@ static int decode_v22(const uint8_t *src, int slen, uint8_t *dst, int dcap, int 
   int pre = 0;
   if (use_hdr) {
     hdr_opt = decode_opt_header(&r);
-    if (hdr_opt < 0) return 0;
+    if (hdr_opt < 0) {
+      gLastConsumed = 0;
+      return 0;
+    }
     if (use_hdr >= 3 && use_hdr != 9 && use_hdr != 10) {
       // Option rANS (0xb40/0xb48) is independent. LZ reloads +0xb38
       // at stream+0; 0x14005fc5d emits on THAT rANS.
@@ -1579,6 +1589,7 @@ static int decode_v22(const uint8_t *src, int slen, uint8_t *dst, int dcap, int 
     fprintf(stderr, "\n");
   }
 #endif
+  gLastConsumed = opt_skip + r.off;
   return n;
 }
 
@@ -1593,6 +1604,8 @@ static int peek_opt(const uint8_t *src, int slen) {
   int o = decode_opt_header(&r);
   return o < 0 ? 0 : o;
 }
+
+extern "C" int magic2_get_input_consumed(void) { return gLastConsumed; }
 
 extern "C" int magic2_decode(const uint8_t *src, int slen, uint8_t *dst, int dcap) {
   if (!src || slen < 4 || !dst || dcap <= 0) return 0;

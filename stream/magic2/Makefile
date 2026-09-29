@@ -17,6 +17,6 @@ $(GUEST): $(SRC)
 		-sINITIAL_MEMORY=67108864 \
 		-sMAXIMUM_MEMORY=2147483648 \
 		-sSTACK_SIZE=1048576 \
-		-sEXPORTED_FUNCTIONS=_magic2_decode,_malloc,_free \
+		-sEXPORTED_FUNCTIONS=_magic2_decode,_magic2_get_input_consumed,_malloc,_free \
 		-Wno-version-check \
 		-o $(GUEST)
