@@ -5,14 +5,12 @@ package magic2
 import (
 	"bytes"
 	"context"
-	_ "embed"
 	"errors"
 	"fmt"
 	"io"
-)
 
-//go:embed magic2dec.wasm
-var guestWASM []byte
+	"github.com/lucasew/garotafitness/stream/magic2/godec"
+)
 
 // maxGroupSize caps each kernel call's input. The shipped kernel decodes
 // exactly one chunk-group per call and terminates on rANS ansLower, so
@@ -59,6 +57,15 @@ type reader struct {
 	outOff  int
 	err     error
 	framing metadataFraming
+	// gst is the per-stream godec working set. Allocated once at
+	// NewReader and threaded through every chunk-group call so the
+	// LZ ring buffer and ROLZ hash chain carry their learned context
+	// forward across chunk-group boundaries. Allocating fresh per
+	// call (the pre-fix shape) reset the ring + hash chain between
+	// chunk-groups and made the decoder diverge from the WASM kernel
+	// on multi-chunk-group solids — see handoff §"Pure-Go decoder
+	// port (godec/) — REGRESSION" §3.
+	gst godec.State
 }
 
 func NewReader(ctx context.Context, src io.Reader) (io.ReadCloser, error) {
@@ -73,11 +80,13 @@ func NewReader(ctx context.Context, src io.Reader) (io.ReadCloser, error) {
 		return nil, fmt.Errorf("magic2: read body: %w", err)
 	}
 	rs := bytes.NewReader(body)
-	return &reader{
+	r := &reader{
 		ctx:     ctx,
 		body:    body,
 		framing: metadataFraming{src: rs, bodyOff: 0},
-	}, nil
+	}
+	r.gst.ROLZ.Reset()
+	return r, nil
 }
 
 func (r *reader) Read(p []byte) (int, error) {
@@ -123,7 +132,7 @@ func (r *reader) nextGroup() error {
 	// --- Path 1: framing-driven (cls-magic2 chunk-group algorithm) ---
 	start, end, expectedOut, ferr := r.framing.Next(int64(r.cur), int64(len(r.body)))
 	if ferr == nil && end > start {
-		out, consumed, derr := decodeFastWithConsumed(r.ctx, r.body[start:end])
+		out, consumed, derr := decodeFastWithConsumed(r.ctx, &r.gst, r.body[start:end])
 		if derr == nil && len(out) > 0 && (expectedOut <= 0 || int64(len(out)) == expectedOut) {
 			r.outBuf = out
 			r.outOff = 0
@@ -137,7 +146,7 @@ func (r *reader) nextGroup() error {
 	}
 
 	// --- Path 2: single-call with kernel-reported consumption ---
-	probeOut, consumed, err := decodeFastWithConsumed(r.ctx, r.body[r.cur:])
+	probeOut, consumed, err := decodeFastWithConsumed(r.ctx, &r.gst, r.body[r.cur:])
 	if err == nil && consumed > 0 && len(probeOut) >= minValidOutput {
 		r.outBuf = probeOut
 		r.outOff = 0
@@ -173,7 +182,7 @@ func (r *reader) nextGroup() error {
 	const maxIters = 32
 	for i := 0; i < maxIters && lo < hi; i++ {
 		mid := (lo + hi) / 2
-		out, err := decodeChunk(r.ctx, r.body[r.cur:r.cur+mid])
+		out, err := decodeChunk(r.ctx, &r.gst, r.body[r.cur:r.cur+mid])
 		// Termination oracle: when the kernel has the full chunk-group in
 		// its input window, it produces exactly len(probeOut) bytes. If it
 		// returns fewer, the window is too small. If it returns the same or
@@ -209,11 +218,11 @@ func (r *reader) Close() error {
 // streaming. Used by tests for direct round-trip comparison and by callers
 // that already know they have exactly one chunk-group.
 func DecodeBytes(ctx context.Context, body []byte) ([]byte, error) {
-	return decodeFast(ctx, body)
+	return decodeFast(ctx, godec.NewState(), body)
 }
 
-func decodeChunk(ctx context.Context, chunk []byte) ([]byte, error) {
-	return decodeFast(ctx, chunk)
+func decodeChunk(ctx context.Context, st *godec.State, chunk []byte) ([]byte, error) {
+	return decodeFast(ctx, st, chunk)
 }
 
 // ensure bytes package is referenced (kept for symmetry with sibling files)
